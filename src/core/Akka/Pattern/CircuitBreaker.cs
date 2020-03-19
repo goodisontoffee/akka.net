@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CircuitBreaker.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -15,29 +15,29 @@ using Akka.Util.Internal;
 namespace Akka.Pattern
 {
     /// <summary>
-    /// Provides circuit breaker functionality to provide stability when working with 
+    /// Provides circuit breaker functionality to provide stability when working with
     /// "dangerous" operations, e.g. calls to remote systems
-    /// 
+    ///
     ///<list type="bullet">
     ///<listheader>
     ///    <description>Transitions through three states:</description>
     ///</listheader>
     ///<item>
     ///    <term>In *Closed* state, </term>
-    ///    <description>calls pass through until the maxFailures count is reached. 
-    ///         This causes the circuit breaker to open. Both exceptions and calls exceeding 
+    ///    <description>calls pass through until the maxFailures count is reached.
+    ///         This causes the circuit breaker to open. Both exceptions and calls exceeding
     ///         callTimeout are considered failures.</description>
     ///</item>
     ///<item>
     ///    <term>In *Open* state, </term>
-    ///    <description>calls fail-fast with an exception. After resetTimeout, 
+    ///    <description>calls fail-fast with an exception. After resetTimeout,
     ///         circuit breaker transitions to half-open state.</description>
     ///</item>
     ///<item>
     ///    <term>In *Half-Open* state, </term>
-    ///    <description>the first call will be allowed through, if it succeeds 
-    ///         the circuit breaker will reset to closed state. If it fails, the circuit 
-    ///         breaker will re-open to open state. All calls beyond the first that execute 
+    ///    <description>the first call will be allowed through, if it succeeds
+    ///         the circuit breaker will reset to closed state. If it fails, the circuit
+    ///         breaker will re-open to open state. All calls beyond the first that execute
     ///         while the first is running will fail-fast with an exception.</description>
     ///</item>
     ///</list>
@@ -173,7 +173,7 @@ namespace Akka.Pattern
         /// <summary>
         /// Wraps invocations of asynchronous calls that need to be protected
         /// If this does not complete within the time allotted, it should return default(<typeparamref name="T"/>)
-        /// 
+        ///
         /// <code>
         ///  Await.result(
         ///      withCircuitBreaker(try Future.successful(body) catch { case NonFatal(t) ⇒ Future.failed(t) }),
@@ -189,6 +189,44 @@ namespace Akka.Pattern
             var cbTask = WithCircuitBreaker(() => Task.Factory.StartNew(body));
             return cbTask.Wait(CallTimeout) ? cbTask.Result : default(T);
         }
+
+        /// <summary>
+        /// Mark a successful call through CircuitBreaker. Sometimes the callee of CircuitBreaker sends back a message to the
+        /// caller Actor. In such a case, it is convenient to mark a successful call instead of using Future
+        /// via <see cref="WithCircuitBreaker"/>
+        /// </summary>
+        public void Succeed() => _currentState.CallSucceeds();
+
+        /// <summary>
+        /// Mark a failed call through CircuitBreaker. Sometimes the callee of CircuitBreaker sends back a message to the
+        /// caller Actor. In such a case, it is convenient to mark a failed call instead of using Future
+        /// via <see cref="WithCircuitBreaker"/>
+        /// </summary>
+        public void Fail() => _currentState.CallFails();
+
+        /// <summary>
+        /// Return true if the internal state is Closed. WARNING: It is a "power API" call which you should use with care.
+        /// Ordinal use cases of CircuitBreaker expects a remote call to return Future, as in <see cref="WithCircuitBreaker"/>.
+        /// So, if you check the state by yourself, and make a remote call outside CircuitBreaker, you should
+        /// manage the state yourself.
+        /// </summary>
+        public bool IsClosed => _currentState is Closed;
+
+        /// <summary>
+        /// Return true if the internal state is Open. WARNING: It is a "power API" call which you should use with care.
+        /// Ordinal use cases of CircuitBreaker expects a remote call to return Future, as in <see cref="WithCircuitBreaker"/>.
+        /// So, if you check the state by yourself, and make a remote call outside CircuitBreaker, you should
+        /// manage the state yourself.
+        /// </summary>
+        public bool IsOpen => _currentState is Open;
+
+        /// <summary>
+        /// Return true if the internal state is HalfOpen. WARNING: It is a "power API" call which you should use with care.
+        /// Ordinal use cases of CircuitBreaker expects a remote call to return Future, as in withCircuitBreaker.
+        /// So, if you check the state by yourself, and make a remote call outside CircuitBreaker, you should
+        /// manage the state yourself.
+        /// </summary>
+        public bool IsHalfOpen => _currentState is HalfOpen;
 
         /// <summary>
         /// Adds a callback to execute when circuit breaker opens
@@ -238,10 +276,7 @@ namespace Akka.Pattern
                 Debug.WriteLine("Successful transition from {0} to {1}", fromState, toState);
                 toState.Enter();
             }
-            else
-            {
-                throw new IllegalStateException($"Illegal transition attempted from {fromState} to {toState}");
-            }
+            // else some other thread already swapped state
         }
 
         /// <summary>

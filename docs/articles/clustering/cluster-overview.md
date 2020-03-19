@@ -19,11 +19,11 @@ The best way to begin introducing Akka.Cluster is with brief overview of what it
 ## Benefits of Akka.Cluster
 In short, these are the benefits of a properly designed cluster:
 
-- **Fault-tolerant**: clusters recover from failures (especially network partitions) elegantly.
+- **Fault tolerant**: clusters recover from failures (especially network partitions) elegantly.
 - **Elastic**: clusters are inherently elastic, and can scale up/down as needed.
 - **Decentralized**: it's possible to have multiple **equal** replicas of a given microservice or piece of application state running simultaneously throughout a cluster
 - **Peer-to-peer**: New nodes can contact existing peers, be notified about other peers, and fully integrate themselves into the network without any configuration changes.
-- **No single point of failure/bottleneck**: multiple nodes are able to service requests, increasing throughput and fault-tolerance.
+- **No single point of failure/bottleneck**: multiple nodes are able to service requests, increasing throughput and fault tolerance.
 
 ## How is Clustering Different From Remoting?
 Akka.Cluster is a layer of abstraction on top of Akka.Remote, that puts Remoting to use for a specific structure: clusters of applications. Under the hood, Akka.Remote powers Akka.Cluster, so anything you could do with Akka.Remote is also supported by Akka.Cluster.
@@ -33,7 +33,7 @@ Generally, Akka.Remote serves as plumbing for Akka.Cluster and other "high avail
 Essentially, Akka.Cluster extends Akka.Remote to provide the basis of scalable applications.
 
 ## Use Cases
-Akka.Cluster lends itself naturally to [high-availability](https://en.wikipedia.org/wiki/High_availability) scenarios.
+Akka.Cluster lends itself naturally to [high availability](https://en.wikipedia.org/wiki/High_availability) scenarios.
 
 To put it bluntly, you should use clustering in any scenario where you have some or all of the following conditions:
 
@@ -84,9 +84,9 @@ Once you've installed Akka.Cluster, we need to update our HOCON configuration to
 #### Seed Node Configuration
 ```xml
 akka {
-    actor.provider = "Akka.Cluster.ClusterActorRefProvider, Akka.Cluster"
+    actor.provider = cluster
     remote {
-        helios.tcp {
+        dot-netty.tcp {
             port = 8081
             hostname = localhost
         }
@@ -102,14 +102,14 @@ In this instance, we're configuring this node to act as a seed node to the clust
 You can, and should, specify multiple seed nodes inside this field - and seed nodes should refer to themselves.
 
 > [!NOTE]
-> if you're using dedicated seed nodes (such as [Lighthouse](https://github.com/petabridge/lighthouse)), you should run at least 2 or 3. If you only have one seed node and that machine crashes, the cluster will continue operating but no new members can join the cluster!
+> If you're using dedicated seed nodes (such as [Lighthouse](https://github.com/petabridge/lighthouse)), you should run at least 2 or 3. If you only have one seed node and that machine crashes, the cluster will continue operating but no new members can join the cluster!
 
 #### Non-Seed Node Configuration
 ```xml
 akka {
-    actor.provider = "Akka.Cluster.ClusterActorRefProvider, Akka.Cluster"
+    actor.provider = cluster
     remote {
-        helios.tcp {
+        dot-netty.tcp {
             port = 0 #let os pick random port
             hostname = localhost
         }
@@ -128,9 +128,9 @@ In this case, we've created a non-seed node - it binds its Akka.Remote transport
 This is important! Even if you're running multiple separate Akka.NET applications inside a single Akka.NET cluster, they must all share the same `ActorSystem` name - otherwise they will not be permitted to join the cluster.
 
 ## Cluster Gossip
-*This is the most important concept within Akka.Cluster*. This is how nodes are able to join and leave clusters without any configuration changes.
+**This is the most important concept within `Akka.Cluster`.** This is how nodes are able to join and leave clusters without any configuration changes.
 
-"[Gossip](https://en.wikipedia.org/wiki/Gossip_protocol)" is the ongoing flow of messages that are passed between nodes in a cluster, updating cluster members of the state of each member of the cluster.
+[Gossip](https://en.wikipedia.org/wiki/Gossip_protocol) is the ongoing flow of messages that are passed between nodes in a cluster, updating cluster members of the state of each member of the cluster.
 
 When a node wants to join a cluster, it must first contact one of its configured seed nodes. Once the node has been able to connect to one seed node, it will begin receiving gossip messages containing information about other members of the cluster.
 
@@ -147,7 +147,7 @@ So in the example above:
 
 Gossip messages will occur regularly over time whenever there is any change in the status of a member of the cluster, such as when a node joins the cluster, leaves the cluster, becomes unreachable by other nodes, etc.
 
-Generally, you will not interact with gossip messages at the application level. But you do need to be aware of them and know that they power the cluster. To learn more about gossip and event types, see "[Working With Cluster Gossip.](cluster-extension.md#working-with-cluster-gossip)"
+Generally, you will not interact with gossip messages at the application level. But you do need to be aware of them and know that they power the cluster. To learn more about gossip and event types, see [Working With Cluster Gossip](xref:cluster-extension#working-with-cluster-gossip).
 
 ## Nodes
 A node is a logical member of a cluster. A node is defined by the address at which it is reachable (hostname:port tuple). Because of this, more than one node can exist simultaneously on a given machine.
@@ -155,6 +155,7 @@ A node is a logical member of a cluster. A node is defined by the address at whi
 ### Seed Nodes
 A seed node is a well-known contact point that a new node must contact in order to join the cluster. Seed nodes function as the service-discovery mechanism of Akka.Cluster.
 
+> [!NOTE]
 > [Lighthouse](https://github.com/petabridge/lighthouse) is a pre-built, dedicated seed node tool that you can use. It's extremely lightweight and only needs to be upgraded when Akka.Cluster itself is upgraded. If you're hosted on a platform like Azure or AWS, you can also tap into the platform-specific APIs to accomplish the same effect.
 
 ## How a Cluster Forms
@@ -200,12 +201,14 @@ After the gossip has had a chance to propagate across all nodes and the leader h
 The cluster leader is chosen by a leader election algorithm that randomly picks a leader from the available set of nodes when the cluster forms. Usually, the leader is one of the seed nodes.
 
 #### Cluster vs. Role Leader
-Each role within the cluster also has a leader, just for that role. Its primary responsibility is enforcing a minimum number of "up" members within the role (if specified in the [cluster config](cluster-configuration.md)).
+Each role within the cluster also has a leader, just for that role. Its primary responsibility is enforcing a minimum number of "up" members within the role (if specified in the [cluster config](xref:cluster-configuration)).
 
 ### Reachability
-Nodes send each other <a href="https://en.wikipedia.org/wiki/Heartbeat_(computing)">heartbeats</a> on an ongoing basis. If a node misses enough heartbeats, this will trigger `unreachable` gossip messages from its peers.
+Nodes send each other <a href="https://en.wikipedia.org/wiki/Heartbeat_(computing)">heartbeats</a> on an ongoing basis. If a node misses enough heartbeats, this will trigger `unreachable` gossip messages from its peers. The leader will wait for the node to either become reachable again, restart or get downed. Until that happens, the cluster is not in a consistent state and the leader indicates that it is unable to perform its duties. If the gossip from a quorum of cluster nodes agree that the node is unreachable ("convergence"), the leader will mark it as down and begin removing the node from the cluster. You can control how long the cluster waits for unreachable nodes through the auto-down-unreachable-after setting.
 
-If the gossip from a quorum of cluster nodes agree that the node is unreachable ("convergence"), the leader will mark it as down and begin removing the node from the cluster.
+When marked as unreachable, the node can restart and join the cluster again, however the association will only be formed if that node is identified as the same node that became unreachable. If you use dynamic addressing (port 0), starting a node again might result in a different port being assigned upon restart. The result of that is that the cluster remains in an inconsistent state, waiting to the unreachable node to either become reachable or get downed.
+
+A node might also exit the cluster gracefully, preventing it from being marked as unreachable in the first place. Akka.net uses IDowningProvider to take the nodes through all the stages of existing the cluster. Starting in Akka.NET 1.2 [CoordinatedShutdown](https://github.com/akkadotnet/akka.net/releases/tag/v1.2) was introduced allowing the user to easily invoke that mechanism.
 
 ## Location Transparency
 [Location transparency](xref:location-transparency) is the underlying principle powering all of Akka.Remote and Akka.Cluster. The key point is that in a cluster, it's entirely possible that the actors you interface with to do work can be living on any node in the cluster... and you don't have to worry about which one.

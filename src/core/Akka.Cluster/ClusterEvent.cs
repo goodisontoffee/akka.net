@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterEvent.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
 using Akka.Actor;
 using Akka.Dispatch;
 using Akka.Event;
@@ -31,7 +32,7 @@ namespace Akka.Cluster
         /// </summary>
         public enum SubscriptionInitialStateMode
         {
-           /// <summary>
+            /// <summary>
             /// When using this subscription mode a snapshot of
             /// <see cref="CurrentClusterState"/> will be sent to the
             /// subscriber as the first message.
@@ -83,7 +84,7 @@ namespace Akka.Cluster
                 ImmutableHashSet<Address>.Empty,
                 null,
                 ImmutableDictionary<string, Address>.Empty)
-            {}
+            { }
 
             /// <summary>
             /// Creates a new instance of the current cluster state.
@@ -294,6 +295,22 @@ namespace Akka.Cluster
         }
 
         /// <summary>
+        /// Member status changed to WeaklyUp.
+        /// A joining member can be moved to <see cref="MemberStatus.WeaklyUp"/> if convergence
+        /// cannot be reached, i.e. there are unreachable nodes.
+        /// It will be moved to <see cref="MemberStatus.Up"/> when convergence is reached.
+        /// </summary>
+        public sealed class MemberWeaklyUp : MemberStatusChange
+        {
+            /// <summary>
+            /// Initializes a new instance of the <see cref="MemberWeaklyUp"/> class.
+            /// </summary>
+            /// <param name="member">The node that changed state.</param>
+            public MemberWeaklyUp(Member member)
+                : base(member, MemberStatus.WeaklyUp) { }
+        }
+
+        /// <summary>
         /// This class represents a <see cref="MemberStatusChange"/> event where the
         /// cluster node changed its status to <see cref="MemberStatus.Leaving"/>.
         /// </summary>
@@ -325,6 +342,22 @@ namespace Akka.Cluster
         }
 
         /// <summary>
+        /// Member status changed to `MemberStatus.Down` and will be removed
+        /// when all members have seen the `Down` status.
+        /// </summary>
+        public sealed class MemberDowned : MemberStatusChange
+        {
+            /// <summary>
+            /// Initializes a new instance of the <see cref="MemberJoined"/> class.
+            /// </summary>
+            /// <param name="member">The node that changed state.</param>
+            public MemberDowned(Member member)
+                : base(member, MemberStatus.Down)
+            {
+            }
+        }
+
+        /// <summary>
         /// <para>
         /// This class represents a <see cref="MemberStatusChange"/> event where the
         /// cluster node changed its status to <see cref="MemberStatus.Removed"/>.
@@ -345,8 +378,8 @@ namespace Akka.Cluster
             /// <summary>
             /// The status of the node before the state change event.
             /// </summary>
-            public MemberStatus PreviousStatus 
-            { 
+            public MemberStatus PreviousStatus
+            {
                 get { return _previousStatus; }
             }
 
@@ -380,7 +413,7 @@ namespace Akka.Cluster
                 unchecked
                 {
                     var hash = 17;
-                    hash = hash *  + base.GetHashCode();
+                    hash = hash * +base.GetHashCode();
                     hash = hash * 23 + _previousStatus.GetHashCode();
                     return hash;
                 }
@@ -491,7 +524,7 @@ namespace Akka.Cluster
             {
                 var other = obj as RoleLeaderChanged;
                 if (other == null) return false;
-                return _role.Equals(other._role) 
+                return _role.Equals(other._role)
                     && ((_leader == null && other._leader == null) || (_leader != null && _leader.Equals(other._leader)));
             }
 
@@ -835,8 +868,8 @@ namespace Akka.Cluster
                 .GroupBy(m => m.UniqueAddress);
 
             var changedMembers = membersGroupedByAddress
-                .Where(g => g.Count() == 2 
-                && (g.First().Status != g.Skip(1).First().Status 
+                .Where(g => g.Count() == 2
+                && (g.First().Status != g.Skip(1).First().Status
                     || g.First().UpNumber != g.Skip(1).First().UpNumber))
                 .Select(g => g.First());
 
@@ -851,10 +884,27 @@ namespace Akka.Cluster
         {
             foreach (var member in members)
             {
-                if (member.Status == MemberStatus.Joining) yield return new MemberJoined(member);
-                if (member.Status == MemberStatus.Up) yield return new MemberUp(member);
-                if (member.Status == MemberStatus.Leaving) yield return new MemberLeft(member);
-                if (member.Status == MemberStatus.Exiting) yield return new MemberExited(member);
+                switch (member.Status)
+                {
+                    case MemberStatus.Joining:
+                        yield return new MemberJoined(member);
+                        break;
+                    case MemberStatus.WeaklyUp:
+                        yield return new MemberWeaklyUp(member);
+                        break;
+                    case MemberStatus.Up:
+                        yield return new MemberUp(member);
+                        break;
+                    case MemberStatus.Leaving:
+                        yield return new MemberLeft(member);
+                        break;
+                    case MemberStatus.Exiting:
+                        yield return new MemberExited(member);
+                        break;
+                    case MemberStatus.Down:
+                        yield return new MemberDowned(member);
+                        break;
+                }
             }
         }
 
@@ -947,7 +997,7 @@ namespace Akka.Cluster
 
     /// <summary>
     /// INTERNAL API.
-    /// 
+    ///
     /// Publishes <see cref="ClusterEvent"/>s out to all subscribers.
     /// </summary>
     internal sealed class ClusterDomainEventPublisher : ReceiveActor, IRequiresMessageQueue<IUnboundedMessageQueueSemantics>
@@ -988,7 +1038,7 @@ namespace Akka.Cluster
         private readonly EventStream _eventStream;
 
         /// <summary>
-        /// The current snapshot state corresponding to latest gossip 
+        /// The current snapshot state corresponding to latest gossip
         /// to mimic what you would have seen if you were listening to the events.
         /// </summary>
         private void SendCurrentClusterState(IActorRef receiver)
@@ -1023,7 +1073,7 @@ namespace Akka.Cluster
                 };
                 PublishDiff(Gossip.Empty, _latestGossip, pub);
             }
-            else if(initMode == ClusterEvent.SubscriptionInitialStateMode.InitialStateAsSnapshot)
+            else if (initMode == ClusterEvent.SubscriptionInitialStateMode.InitialStateAsSnapshot)
             {
                 SendCurrentClusterState(subscriber);
             }

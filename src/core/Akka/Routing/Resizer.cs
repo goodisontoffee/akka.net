@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Resizer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,7 +10,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Akka.Configuration;
-using Akka.Dispatch;
 
 namespace Akka.Routing
 {
@@ -57,7 +56,7 @@ namespace Akka.Routing
         {
             var defaultResizerConfig = parentConfig.GetConfig("resizer");
 
-            if (defaultResizerConfig != null && defaultResizerConfig.GetBoolean("enabled"))
+            if (!defaultResizerConfig.IsNullOrEmpty() && defaultResizerConfig.GetBoolean("enabled", false))
             {
                 return DefaultResizer.Apply(defaultResizerConfig);
             }
@@ -135,7 +134,7 @@ namespace Akka.Routing
         /// <returns>TBD</returns>
         public new static DefaultResizer FromConfig(Config resizerConfig)
         {
-            return resizerConfig.GetBoolean("resizer.enabled") ? DefaultResizer.Apply(resizerConfig.GetConfig("resizer")) : null;
+            return resizerConfig.GetBoolean("resizer.enabled", false) ? DefaultResizer.Apply(resizerConfig.GetConfig("resizer")) : null;
         }
 
         /// <summary>
@@ -145,14 +144,17 @@ namespace Akka.Routing
         /// <returns>TBD</returns>
         internal static DefaultResizer Apply(Config resizerConfig)
         {
+            if (resizerConfig.IsNullOrEmpty())
+                throw ConfigurationException.NullOrEmptyConfig<DefaultResizer>();
+
             return new DefaultResizer(
-                  resizerConfig.GetInt("lower-bound"),
-                  resizerConfig.GetInt("upper-bound"),
-                  resizerConfig.GetInt("pressure-threshold"),
-                  resizerConfig.GetDouble("rampup-rate"),
-                  resizerConfig.GetDouble("backoff-threshold"),
-                  resizerConfig.GetDouble("backoff-rate"),
-                  resizerConfig.GetInt("messages-per-resize")
+                  resizerConfig.GetInt("lower-bound", 0),
+                  resizerConfig.GetInt("upper-bound", 0),
+                  resizerConfig.GetInt("pressure-threshold", 0),
+                  resizerConfig.GetDouble("rampup-rate", 0),
+                  resizerConfig.GetDouble("backoff-threshold", 0),
+                  resizerConfig.GetDouble("backoff-rate", 0),
+                  resizerConfig.GetInt("messages-per-resize", 0)
                 );
         }
 
@@ -219,31 +221,25 @@ namespace Akka.Routing
             return currentRoutees.Count(
                 routee =>
                 {
-                    var actorRefRoutee = routee as ActorRefRoutee;
-                    if (actorRefRoutee != null)
+                    if (routee is ActorRefRoutee actorRefRoutee && actorRefRoutee.Actor is ActorRefWithCell actorRef)
                     {
-                        var actorRef = actorRefRoutee.Actor as ActorRefWithCell;
-                        if (actorRef != null)
+                        var underlying = actorRef.Underlying;
+                        if (underlying is ActorCell cell)
                         {
-                            var underlying = actorRef.Underlying;
-                            var cell = underlying as ActorCell;
-                            if (cell != null)
-                            {
-                                if (PressureThreshold == 1)
-                                    return cell.Mailbox.IsScheduled() && cell.Mailbox.HasMessages;
-                                if (PressureThreshold < 1)
-                                    return cell.Mailbox.IsScheduled() && cell.CurrentMessage != null;
+                            if (PressureThreshold == 1)
+                                return cell.Mailbox.IsScheduled() && cell.Mailbox.HasMessages;
+                            if (PressureThreshold < 1)
+                                return cell.Mailbox.IsScheduled() && cell.CurrentMessage != null;
 
-                                return cell.Mailbox.NumberOfMessages >= PressureThreshold;
-                            }
-                            else
-                            {
-                                if (PressureThreshold == 1)
-                                    return underlying.HasMessages;
-                                if (PressureThreshold < 1)
-                                    return true; //unstarted cells are always busy, for instance
-                                return underlying.NumberOfMessages >= PressureThreshold;
-                            }
+                            return cell.Mailbox.NumberOfMessages >= PressureThreshold;
+                        }
+                        else
+                        {
+                            if (PressureThreshold == 1)
+                                return underlying.HasMessages;
+                            if (PressureThreshold < 1)
+                                return true; //unstarted cells are always busy, for instance
+                            return underlying.NumberOfMessages >= PressureThreshold;
                         }
                     }
                     return false;
@@ -271,7 +267,7 @@ namespace Akka.Routing
         /// <returns>proposed increase in capacity</returns>
         public int Rampup(int pressure, int capacity)
         {
-            return (pressure < capacity) ? 0 : Convert.ToInt32(Math.Ceiling(RampupRate * capacity));
+            return pressure < capacity ? 0 : Convert.ToInt32(Math.Ceiling(RampupRate * capacity));
         }
 
         /// <summary>
@@ -382,4 +378,3 @@ namespace Akka.Routing
         }
     }
 }
-

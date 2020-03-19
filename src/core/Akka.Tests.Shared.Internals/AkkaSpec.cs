@@ -1,15 +1,17 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="AkkaSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.TestKit.Internal.StringMatcher;
@@ -41,7 +43,9 @@ namespace Akka.TestKit
               #  }
               #}
             }
-          }");
+          }
+          # use random ports to avoid race conditions with binding contention
+          akka.remote.dot-netty.tcp.port = 0");
 
         private static int _systemNumber = 0;
 
@@ -89,6 +93,10 @@ namespace Akka.TestKit
 
         private static string GetCallerName()
         {
+#if CORECLR
+            // TODO: CORECLR FIX IT
+            var name = "AkkaSpec";
+#else
             var systemNumber = Interlocked.Increment(ref _systemNumber);
             var stackTrace = new StackTrace(0);
             var name = stackTrace.GetFrames().
@@ -97,6 +105,7 @@ namespace Akka.TestKit
                 SkipWhile(m => m.DeclaringType.Name == "AkkaSpec").
                 Select(m => _nameReplaceRegex.Replace(m.DeclaringType.Name + "-" + systemNumber, "-")).
                 FirstOrDefault() ?? "test";
+#endif
             return name;
         }
 
@@ -112,24 +121,22 @@ namespace Akka.TestKit
             var message = envelope.Message;
             Assertions.AssertTrue(message != null, string.Format("expected {0} but got null message", hint));
             //TODO: Check next line. 
-            Assertions.AssertTrue(function.Method.GetParameters().Any(x => x.ParameterType.IsInstanceOfType(message)), string.Format("expected {0} but got {1} instead", hint, message));
+            Assertions.AssertTrue(function.GetMethodInfo().GetParameters().Any(x => x.ParameterType.IsInstanceOfType(message)), string.Format("expected {0} but got {1} instead", hint, message));
             return function.Invoke(message);
         }
-
-
 
         protected T ExpectMsgPf<T>(string hint, Func<object, T> pf)
         {
             var t = ExpectMsg<T>();
             //TODO: Check if this really is needed:
-            Assertions.AssertTrue(pf.Method.GetParameters().Any(x => x.ParameterType.IsInstanceOfType(t)), string.Format("expected {0} but got {1} instead", hint, t));
+            Assertions.AssertTrue(pf.GetMethodInfo().GetParameters().Any(x => x.ParameterType.IsInstanceOfType(t)), string.Format("expected {0} but got {1} instead", hint, t));
             return pf.Invoke(t);
         }
 
 
-        protected void Intercept<T>(Action actionThatThrows) where T : Exception
+        protected T Intercept<T>(Action actionThatThrows) where T : Exception
         {
-            Assert.Throws<T>(() => actionThatThrows());
+            return Assert.Throws<T>(() => actionThatThrows());
         }
 
         protected void Intercept(Action actionThatThrows)
@@ -137,6 +144,19 @@ namespace Akka.TestKit
             try
             {
                 actionThatThrows();
+            }
+            catch(Exception)
+            {
+                return;
+            }
+            throw new ThrowsException(typeof(Exception));
+        }
+        
+        protected async Task InterceptAsync(Func<Task> asyncActionThatThrows)
+        {
+            try
+            {
+                await asyncActionThatThrows();
             }
             catch(Exception)
             {

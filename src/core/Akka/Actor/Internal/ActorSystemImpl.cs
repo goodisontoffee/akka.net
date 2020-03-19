@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorSystemImpl.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -15,17 +15,23 @@ using Akka.Configuration;
 using Akka.Dispatch;
 using Akka.Dispatch.SysMsg;
 using Akka.Event;
+using System.Reflection;
 using Akka.Serialization;
 using Akka.Util;
-
+using ConfigurationFactory = Akka.Configuration.ConfigurationFactory;
 
 namespace Akka.Actor.Internal
 {
+    internal interface ISupportSerializationConfigReload
+    {
+        void ReloadSerialization();
+    }
+
     /// <summary>
-    /// TBD
+    /// INTERNAL API
     /// <remarks>Note! Part of internal API. Breaking changes may occur without notice. Use at own risk.</remarks>
     /// </summary>
-    public class ActorSystemImpl : ExtendedActorSystem
+    public class ActorSystemImpl : ExtendedActorSystem, ISupportSerializationConfigReload
     {
         private IActorRef _logDeadLetterListener;
         private readonly ConcurrentDictionary<Type, Lazy<object>> _extensions = new ConcurrentDictionary<Type, Lazy<object>>();
@@ -47,7 +53,7 @@ namespace Akka.Actor.Internal
         /// </summary>
         /// <param name="name">The name given to the actor system.</param>
         public ActorSystemImpl(string name)
-            : this(name, ConfigurationFactory.Load())
+            : this(name, ConfigurationFactory.Default())
         {
         }
 
@@ -66,8 +72,10 @@ namespace Akka.Actor.Internal
             if(!Regex.Match(name, "^[a-zA-Z0-9][a-zA-Z0-9-]*$").Success)
                 throw new ArgumentException(
                     $"Invalid ActorSystem name [{name}], must contain only word characters (i.e. [a-zA-Z0-9] plus non-leading '-')", nameof(name));
-            if(config == null)
-                throw new ArgumentNullException(nameof(config), "Configuration must not be null.");
+
+            // Not checking for empty Config here, default values will be substituted in Settings class constructor (called in ConfigureSettings)
+            if(config is null)
+                throw new ArgumentNullException(nameof(config), $"Cannot create {typeof(ActorSystemImpl)}: Configuration must not be null.");
 
             _name = name;            
             ConfigureSettings(config);
@@ -181,6 +189,9 @@ namespace Akka.Actor.Internal
         {
             try
             {
+                // Force TermInfoDriver to initialize in order to protect us from the issue seen in #2432
+                typeof(Console).GetProperty("BackgroundColor").GetValue(null); // HACK: Only needed for MONO
+
                 RegisterOnTermination(StopScheduler);
                 _provider.Init(this);
                 LoadExtensions();
@@ -218,44 +229,31 @@ namespace Akka.Actor.Internal
         private void WarnIfJsonIsDefaultSerializer()
         {
             const string configPath = "akka.suppress-json-serializer-warning";
-            var showSerializerWarning = Settings.Config.HasPath(configPath) && !Settings.Config.GetBoolean(configPath);
+            var showSerializerWarning = Settings.Config.HasPath(configPath) && !Settings.Config.GetBoolean(configPath, false);
 
             if (showSerializerWarning &&
                 Serialization.FindSerializerForType(typeof (object)) is NewtonSoftJsonSerializer)
             {
                 Log.Warning($"NewtonSoftJsonSerializer has been detected as a default serializer. " +
                             $"It will be obsoleted in Akka.NET starting from version 1.5 in the favor of Hyperion " +
-                            $"(for more info visit: http://getakka.net/docs/Serialization#how-to-setup-hyperion-as-default-serializer ). " +
+                            $"(for more info visit: http://getakka.net/articles/networking/serialization.html#how-to-setup-hyperion-as-default-serializer ). " +
                             $"If you want to suppress this message set HOCON `{configPath}` config flag to on.");
             }
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="props">TBD</param>
-        /// <param name="name">TBD</param>
-        /// <returns>TBD</returns>
+        /// <inheritdoc/>
         public override IActorRef ActorOf(Props props, string name = null)
         {
             return _provider.Guardian.Cell.AttachChild(props, false, name);
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="actorPath">TBD</param>
-        /// <returns>TBD</returns>
+        /// <inheritdoc/>
         public override ActorSelection ActorSelection(ActorPath actorPath)
         {
             return ActorRefFactoryShared.ActorSelection(actorPath, this);
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="actorPath">TBD</param>
-        /// <returns>TBD</returns>
+        /// <inheritdoc/>
         public override ActorSelection ActorSelection(string actorPath)
         {
             return ActorRefFactoryShared.ActorSelection(actorPath, this, _provider.RootGuardian);
@@ -276,10 +274,10 @@ namespace Akka.Actor.Internal
         private void LoadExtensions()
         {
             var extensions = new List<IExtensionId>();
-            foreach(var extensionFqn in _settings.Config.GetStringList("akka.extensions"))
+            foreach(var extensionFqn in _settings.Config.GetStringList("akka.extensions", new string[] { }))
             {
                 var extensionType = Type.GetType(extensionFqn);
-                if(extensionType == null || !typeof(IExtensionId).IsAssignableFrom(extensionType) || extensionType.IsAbstract || !extensionType.IsClass)
+                if(extensionType == null || !typeof(IExtensionId).IsAssignableFrom(extensionType) || extensionType.GetTypeInfo().IsAbstract || !extensionType.GetTypeInfo().IsClass)
                 {
                     _log.Error("[{0}] is not an 'ExtensionId', skipping...", extensionFqn);
                     continue;
@@ -342,8 +340,7 @@ namespace Akka.Actor.Internal
         /// <returns><c>true</c> if the retrieval was successful; otherwise <c>false</c>.</returns>
         public override bool TryGetExtension(Type extensionType, out object extension)
         {
-            Lazy<object> lazyExtension;
-            var wasFound = _extensions.TryGetValue(extensionType, out lazyExtension);
+            var wasFound = _extensions.TryGetValue(extensionType, out var lazyExtension);
             extension = wasFound ? lazyExtension.Value : null;
             return wasFound;
         }
@@ -356,8 +353,7 @@ namespace Akka.Actor.Internal
         /// <returns><c>true</c> if the retrieval was successful; otherwise <c>false</c>.</returns>
         public override bool TryGetExtension<T>(out T extension)
         {
-            Lazy<object> lazyExtension;
-            var wasFound = _extensions.TryGetValue(typeof(T), out lazyExtension);
+            var wasFound = _extensions.TryGetValue(typeof(T), out var lazyExtension);
             extension = wasFound ? lazyExtension.Value as T : null;
             return wasFound;
         }
@@ -412,6 +408,11 @@ namespace Akka.Actor.Internal
         private void ConfigureSerialization()
         {
             _serialization = new Serialization.Serialization(this);
+        }
+
+        void ISupportSerializationConfigReload.ReloadSerialization() {
+            if(_serialization != null)
+                ConfigureSerialization();
         }
 
         private void ConfigureMailboxes()
@@ -497,6 +498,8 @@ namespace Akka.Actor.Internal
         public override Task Terminate()
         {
             Log.Debug("System shutdown initiated");
+            if (!Settings.LogDeadLettersDuringShutdown && _logDeadLetterListener != null) 
+                Stop(_logDeadLetterListener);
             _provider.Guardian.Stop();
             return WhenTerminated;
         }
@@ -524,12 +527,17 @@ namespace Akka.Actor.Internal
             else
                 ((IInternalActorRef)actor).Stop();
         }
+
+        public override string ToString()
+        {
+            return LookupRoot.Path.Root.Address.ToString();
+        }
     }
 
     /// <summary>
     /// This class represents a callback used to run a task when the actor system is terminating.
     /// </summary>
-    class TerminationCallbacks
+    internal class TerminationCallbacks
     {
         private Task _terminationTask;
         private readonly AtomicReference<Task> _atomicRef;

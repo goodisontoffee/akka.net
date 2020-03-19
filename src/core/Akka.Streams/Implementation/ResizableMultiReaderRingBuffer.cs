@@ -1,7 +1,7 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="ResizableMultiReaderRingBuffer.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.Serialization;
+using Akka.Annotations;
 using Akka.Streams.Util;
 
 namespace Akka.Streams.Implementation
@@ -28,6 +29,7 @@ namespace Akka.Streams.Implementation
         {
         }
 
+#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="NothingToReadException"/> class.
         /// </summary>
@@ -37,6 +39,7 @@ namespace Akka.Streams.Implementation
             : base(info, context)
         {
         }
+#endif
     }
 
     /// <summary>
@@ -68,6 +71,7 @@ namespace Akka.Streams.Implementation
     /// elements, rather, if full, the buffer tries to grow and rejects further writes if max capacity is reached.
     /// </summary>
     /// <typeparam name="T">TBD</typeparam>
+    [InternalApi]
     public class ResizableMultiReaderRingBuffer<T>
     {
         private readonly int _maxSizeBit;

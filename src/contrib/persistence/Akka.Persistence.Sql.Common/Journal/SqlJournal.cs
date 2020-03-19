@@ -1,14 +1,13 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SqlJournal.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Configuration;
 using System.Data.Common;
 using System.Linq;
 using System.Threading;
@@ -17,7 +16,6 @@ using Akka.Actor;
 using Akka.Configuration;
 using Akka.Event;
 using Akka.Persistence.Journal;
-using Akka.Persistence.Sql.Common.Queries;
 
 namespace Akka.Persistence.Sql.Common.Journal
 {
@@ -26,8 +24,8 @@ namespace Akka.Persistence.Sql.Common.Journal
     /// </summary>
     public abstract class SqlJournal : AsyncWriteJournal, IWithUnboundedStash
     {
-        private readonly Dictionary<string, ISet<IActorRef>> _persistenceIdSubscribers = new Dictionary<string, ISet<IActorRef>>();
-        private readonly Dictionary<string, ISet<IActorRef>> _tagSubscribers = new Dictionary<string, ISet<IActorRef>>();
+        private ImmutableDictionary<string, IImmutableSet<IActorRef>> _persistenceIdSubscribers = ImmutableDictionary.Create<string, IImmutableSet<IActorRef>>();
+        private ImmutableDictionary<string, IImmutableSet<IActorRef>> _tagSubscribers = ImmutableDictionary.Create<string, IImmutableSet<IActorRef>>();
         private readonly HashSet<IActorRef> _allPersistenceIdSubscribers = new HashSet<IActorRef>();
         private readonly ReaderWriterLockSlim _allPersistenceIdsLock = new ReaderWriterLockSlim();
         private HashSet<string> _allPersistenceIds = new HashSet<string>();
@@ -122,7 +120,6 @@ namespace Akka.Persistence.Sql.Common.Journal
                     Context.Watch(Sender);
                 })
                 .With<Terminated>(terminated => RemoveSubscriber(terminated.ActorRef))
-                .With<Query>(query => HandleEventQuery(query))
                 .WasHandled;
         }
 
@@ -171,7 +168,8 @@ namespace Akka.Persistence.Sql.Common.Journal
                     }
 
                     var batch = new WriteJournalBatch(eventToTags);
-                    await QueryExecutor.InsertBatchAsync(connection, _pendingRequestsCancellation.Token, batch);
+                    using(var cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(_pendingRequestsCancellation.Token))
+                        await QueryExecutor.InsertBatchAsync(connection, cancellationToken.Token, batch);
                 }
             }).ToArray();
 
@@ -209,13 +207,16 @@ namespace Akka.Persistence.Sql.Common.Journal
             using (var connection = CreateDbConnection())
             {
                 await connection.OpenAsync();
-                return await QueryExecutor
-                    .SelectByTagAsync(connection, _pendingRequestsCancellation.Token, replay.Tag, replay.FromOffset, replay.ToOffset, replay.Max, replayedTagged => {
-                        foreach(var adapted in AdaptFromJournal(replayedTagged.Persistent))
-                        { 
-                            replay.ReplyTo.Tell(new ReplayedTaggedMessage(adapted, replayedTagged.Tag, replayedTagged.Offset), ActorRefs.NoSender);
-                        }
-                    });
+                using(var cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(_pendingRequestsCancellation.Token))
+                {
+                    return await QueryExecutor
+                        .SelectByTagAsync(connection, cancellationToken.Token, replay.Tag, replay.FromOffset, replay.ToOffset, replay.Max, replayedTagged => {
+                            foreach(var adapted in AdaptFromJournal(replayedTagged.Persistent))
+                            { 
+                                replay.ReplyTo.Tell(new ReplayedTaggedMessage(adapted, replayedTagged.Tag, replayedTagged.Offset), ActorRefs.NoSender);
+                            }
+                        });
+                 }
             }
         }
 
@@ -236,7 +237,10 @@ namespace Akka.Persistence.Sql.Common.Journal
             using (var connection = CreateDbConnection())
             {
                 await connection.OpenAsync();
-                await QueryExecutor.SelectByPersistenceIdAsync(connection, _pendingRequestsCancellation.Token, persistenceId, fromSequenceNr, toSequenceNr, max, recoveryCallback);
+                using (var cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(_pendingRequestsCancellation.Token))
+                {
+                    await QueryExecutor.SelectByPersistenceIdAsync(connection, cancellationToken.Token, persistenceId, fromSequenceNr, toSequenceNr, max, recoveryCallback);
+                }
             }
         }
 
@@ -289,14 +293,16 @@ namespace Akka.Persistence.Sql.Common.Journal
                 using (var connection = CreateDbConnection())
                 {
                     await connection.OpenAsync();
-
-                    if (_settings.AutoInitialize)
+                    using (var cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(_pendingRequestsCancellation.Token))
                     {
-                        await QueryExecutor.CreateTablesAsync(connection, _pendingRequestsCancellation.Token);
-                    }
+                        if (_settings.AutoInitialize)
+                        {
+                            await QueryExecutor.CreateTablesAsync(connection, cancellationToken.Token);
+                        }
 
-                    var ids = await QueryExecutor.SelectAllPersistenceIdsAsync(connection, _pendingRequestsCancellation.Token);
-                    return new AllPersistenceIds(ids);
+                        var ids = await QueryExecutor.SelectAllPersistenceIdsAsync(connection, cancellationToken.Token);
+                        return new AllPersistenceIds(ids);
+                    }
                 }
             }
             catch (Exception e)
@@ -321,13 +327,13 @@ namespace Akka.Persistence.Sql.Common.Journal
         /// <param name="subscriber">TBD</param>
         public void RemoveSubscriber(IActorRef subscriber)
         {
-            var pidSubscriptions = _persistenceIdSubscribers.Values.Where(x => x.Contains(subscriber));
-            foreach (var subscription in pidSubscriptions)
-                subscription.Remove(subscriber);
+            _persistenceIdSubscribers = _persistenceIdSubscribers.SetItems(_persistenceIdSubscribers
+                .Where(kv => kv.Value.Contains(subscriber))
+                .Select(kv => new KeyValuePair<string, IImmutableSet<IActorRef>>(kv.Key, kv.Value.Remove(subscriber))));
 
-            var tagSubscriptions = _tagSubscribers.Values.Where(x => x.Contains(subscriber));
-            foreach (var subscription in tagSubscriptions)
-                subscription.Remove(subscriber);
+            _tagSubscribers = _tagSubscribers.SetItems(_tagSubscribers
+                .Where(kv => kv.Value.Contains(subscriber))
+                .Select(kv => new KeyValuePair<string, IImmutableSet<IActorRef>>(kv.Key, kv.Value.Remove(subscriber))));
 
             _allPersistenceIdSubscribers.Remove(subscriber);
         }
@@ -339,14 +345,14 @@ namespace Akka.Persistence.Sql.Common.Journal
         /// <param name="tag">TBD</param>
         public void AddTagSubscriber(IActorRef subscriber, string tag)
         {
-            ISet<IActorRef> subscriptions;
-            if (!_tagSubscribers.TryGetValue(tag, out subscriptions))
+            if (!_tagSubscribers.TryGetValue(tag, out var subscriptions))
             {
-                subscriptions = new HashSet<IActorRef>();
-                _tagSubscribers.Add(tag, subscriptions);
+                _tagSubscribers = _tagSubscribers.Add(tag, ImmutableHashSet.Create(subscriber));
             }
-
-            subscriptions.Add(subscriber);
+            else
+            {
+                _tagSubscribers = _tagSubscribers.SetItem(tag, subscriptions.Add(subscriber));
+            }
         }
 
         /// <summary>
@@ -366,23 +372,21 @@ namespace Akka.Persistence.Sql.Common.Journal
         /// <param name="persistenceId">TBD</param>
         public void AddPersistenceIdSubscriber(IActorRef subscriber, string persistenceId)
         {
-            ISet<IActorRef> subscriptions;
-            if (!_persistenceIdSubscribers.TryGetValue(persistenceId, out subscriptions))
+            if (!_persistenceIdSubscribers.TryGetValue(persistenceId, out var subscriptions))
             {
-                subscriptions = new HashSet<IActorRef>();
-                _persistenceIdSubscribers.Add(persistenceId, subscriptions);
+                _persistenceIdSubscribers = _persistenceIdSubscribers.Add(persistenceId, ImmutableHashSet.Create(subscriber));
             }
-
-            subscriptions.Add(subscriber);
+            else
+            {
+                _persistenceIdSubscribers = _persistenceIdSubscribers.Add(persistenceId, subscriptions.Add(subscriber));
+            }
         }
 
         private async Task<long> NextTagSequenceNr(string tag)
         {
-            long value;
-            if (!_tagSequenceNr.TryGetValue(tag, out value))
-            {
+            if (!_tagSequenceNr.TryGetValue(tag, out long value))
                 value = await ReadHighestSequenceNrAsync(TagId(tag), 0L);
-            }
+
             value++;
             _tagSequenceNr = _tagSequenceNr.SetItem(tag, value);
             return value;
@@ -435,8 +439,7 @@ namespace Akka.Persistence.Sql.Common.Journal
 
         private void NotifyPersistenceIdChange(string persistenceId)
         {
-            ISet<IActorRef> subscribers;
-            if (_persistenceIdSubscribers.TryGetValue(persistenceId, out subscribers))
+            if (_persistenceIdSubscribers.TryGetValue(persistenceId, out var subscribers))
             {
                 var changed = new EventAppended(persistenceId);
                 foreach (var subscriber in subscribers)
@@ -446,8 +449,7 @@ namespace Akka.Persistence.Sql.Common.Journal
 
         private void NotifyTagChange(string tag)
         {
-            ISet<IActorRef> subscribers;
-            if (_tagSubscribers.TryGetValue(tag, out subscribers))
+            if (_tagSubscribers.TryGetValue(tag, out var subscribers))
             {
                 var changed = new TaggedEventAppended(tag);
                 foreach (var subscriber in subscribers)
@@ -468,7 +470,10 @@ namespace Akka.Persistence.Sql.Common.Journal
             using (var connection = CreateDbConnection())
             {
                 await connection.OpenAsync();
-                await QueryExecutor.DeleteBatchAsync(connection, _pendingRequestsCancellation.Token, persistenceId, toSequenceNr);
+                using (var cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(_pendingRequestsCancellation.Token))
+                {
+                    await QueryExecutor.DeleteBatchAsync(connection, cancellationToken.Token, persistenceId, toSequenceNr);
+                }
             }
         }
 
@@ -484,7 +489,10 @@ namespace Akka.Persistence.Sql.Common.Journal
             using (var connection = CreateDbConnection())
             {
                 await connection.OpenAsync();
-                return await QueryExecutor.SelectHighestSequenceNrAsync(connection, _pendingRequestsCancellation.Token, persistenceId);
+                using (var cancellationToken = CancellationTokenSource.CreateLinkedTokenSource(_pendingRequestsCancellation.Token))
+                {
+                    return await QueryExecutor.SelectHighestSequenceNrAsync(connection, cancellationToken.Token, persistenceId);
+                }
             }
         }
 
@@ -495,10 +503,13 @@ namespace Akka.Persistence.Sql.Common.Journal
         protected virtual string GetConnectionString()
         {
             var connectionString = _settings.ConnectionString;
+
+#if CONFIGURATION
             if (string.IsNullOrEmpty(connectionString))
             {
-                connectionString = ConfigurationManager.ConnectionStrings[_settings.ConnectionStringName].ConnectionString;
+                connectionString = System.Configuration.ConfigurationManager.ConnectionStrings[_settings.ConnectionStringName].ConnectionString;
             }
+#endif
 
             return connectionString;
         }
@@ -522,38 +533,6 @@ namespace Akka.Persistence.Sql.Common.Journal
                 return (ITimestampProvider)Activator.CreateInstance(type);
             }
         }
-
-        [Obsolete("Existing SQL persistence query will be obsoleted, once Akka.Persistence.Query will came out")]
-        private void HandleEventQuery(Query query)
-        {
-            var queryId = query.QueryId;
-            var sender = Context.Sender;
-            ReadEvents(queryId, query.Hints, Context.Sender, reply =>
-            {
-                foreach (var adapted in AdaptFromJournal(reply))
-                {
-                    sender.Tell(new QueryResponse(queryId, adapted));
-                }
-            })
-            .ContinueWith(task =>
-                task.IsFaulted || task.IsCanceled ? (IQueryReply)new QueryFailure(queryId, task.Exception) : new QuerySuccess(queryId),
-                TaskContinuationOptions.ExecuteSynchronously)
-            .PipeTo(Context.Sender);
-        }
-
-        /// <summary>
-        /// Performs
-        /// </summary>
-        [Obsolete("Existing SQL persistence query will be obsoleted, once Akka.Persistence.Query will came out")]
-        private async Task ReadEvents(object queryId, IEnumerable<IHint> hints, IActorRef sender, Action<IPersistentRepresentation> replayCallback)
-        {
-            using (var connection = CreateDbConnection())
-            {
-                await connection.OpenAsync();
-                await QueryExecutor.SelectEventsAsync(connection, _pendingRequestsCancellation.Token, hints, replayCallback);
-            }
-        }
-
         #endregion
     }
 }

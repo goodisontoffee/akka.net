@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Dispatchers.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -11,7 +11,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
+using Akka.Configuration;
 using Helios.Concurrency;
+using ConfigurationFactory = Akka.Configuration.ConfigurationFactory;
 
 namespace Akka.Dispatch
 {
@@ -43,6 +45,7 @@ namespace Akka.Dispatch
         }
     }
 
+#if UNSAFE_THREADING
     /// <summary>
     /// INTERNAL API
     /// </summary>
@@ -65,6 +68,7 @@ namespace Akka.Dispatch
         {
         }
     }
+#endif
 
     /// <summary>
     /// INTERNAL API
@@ -211,7 +215,7 @@ namespace Akka.Dispatch
         public static readonly string SynchronizedDispatcherId = "akka.actor.synchronized-dispatcher";
 
         private readonly ActorSystem _system;
-        private CachingConfig _cachingConfig;
+        private Config _cachingConfig;
         private readonly MessageDispatcher _defaultGlobalDispatcher;
 
         /// <summary>
@@ -239,7 +243,7 @@ namespace Akka.Dispatch
         }
 
         /// <summary>
-        /// The <see cref="Configuration.Config"/> for the default dispatcher.
+        /// The <see cref="Hocon.Config"/> for the default dispatcher.
         /// </summary>
         public Config DefaultDispatcherConfig
         {
@@ -296,21 +300,16 @@ namespace Akka.Dispatch
 
         private MessageDispatcherConfigurator LookupConfigurator(string id)
         {
-            MessageDispatcherConfigurator configurator;
-            if (!_dispatcherConfigurators.TryGetValue(id, out configurator))
+            if (!_dispatcherConfigurators.TryGetValue(id, out var configurator))
             {
                 // It doesn't matter if we create a dispatcher configurator that isn't used due to concurrent lookup.
                 // That shouldn't happen often and in case it does the actual ExecutorService isn't
                 // created until used, i.e. cheap.
                 MessageDispatcherConfigurator newConfigurator;
                 if (_cachingConfig.HasPath(id))
-                {
                     newConfigurator = ConfiguratorFrom(Config(id));
-                }
                 else
-                {
                     throw new ConfigurationException($"Dispatcher {id} not configured.");
-                }
 
                 return _dispatcherConfigurators.TryAdd(id, newConfigurator) ? newConfigurator : _dispatcherConfigurators[id];
             }
@@ -321,7 +320,7 @@ namespace Akka.Dispatch
         /// <summary>
         /// INTERNAL API
         /// 
-        /// Creates a dispatcher from a <see cref="Configuration.Config"/>. Internal test purpose only.
+        /// Creates a dispatcher from a <see cref="Hocon.Config"/>. Internal test purpose only.
         /// <code>
         /// From(Config.GetConfig(id));
         /// </code>
@@ -391,10 +390,14 @@ namespace Akka.Dispatch
         private static readonly Config TaskExecutorConfig = ConfigurationFactory.ParseString(@"executor=task-executor");
         private MessageDispatcherConfigurator ConfiguratorFrom(Config cfg)
         {
-            if (!cfg.HasPath("id")) throw new ConfigurationException($"Missing dispatcher `id` property in config: {cfg.Root}");
+            if (cfg.IsNullOrEmpty())
+                throw ConfigurationException.NullOrEmptyConfig<MessageDispatcherConfigurator>();
 
-            var id = cfg.GetString("id");
-            var type = cfg.GetString("type");
+            if (!cfg.HasPath("id"))
+                throw new ConfigurationException($"Missing dispatcher `id` property in config: {cfg.Root}");
+
+            var id = cfg.GetString("id", null);
+            var type = cfg.GetString("type", null);
 
 
             MessageDispatcherConfigurator dispatcher;
@@ -452,16 +455,19 @@ namespace Akka.Dispatch
             : base(config, prerequisites)
         {
             // Need to see if a non-zero value is available for this setting
-            TimeSpan deadlineTime = config.GetTimeSpan("throughput-deadline-time");
+            TimeSpan deadlineTime = Config.GetTimeSpan("throughput-deadline-time", null);
             long? deadlineTimeTicks = null;
             if (deadlineTime.Ticks > 0)
                 deadlineTimeTicks = deadlineTime.Ticks;
 
-            _instance = new Dispatcher(this, config.GetString("id"), 
-                config.GetInt("throughput"),
+            if (Config.IsNullOrEmpty())
+                throw ConfigurationException.NullOrEmptyConfig<DispatcherConfigurator>();
+
+            _instance = new Dispatcher(this, Config.GetString("id"),
+                Config.GetInt("throughput"),
                 deadlineTimeTicks,
                 ConfigureExecutor(),
-                config.GetTimeSpan("shutdown-timeout"));
+                Config.GetTimeSpan("shutdown-timeout"));
         }
 
 

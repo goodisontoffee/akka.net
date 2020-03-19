@@ -1,7 +1,7 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="StreamSubscriptionTimeout.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Runtime.Serialization;
 using System.Threading;
 using Akka.Actor;
+using Akka.Annotations;
 using Reactive.Streams;
 
 namespace Akka.Streams.Implementation
@@ -35,6 +36,7 @@ namespace Akka.Streams.Implementation
         {
         }
 
+#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="SubscriptionTimeoutException"/> class.
         /// </summary>
@@ -43,6 +45,7 @@ namespace Akka.Streams.Implementation
         protected SubscriptionTimeoutException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
+#endif
     }
 
     /// <summary>
@@ -91,6 +94,7 @@ namespace Akka.Streams.Implementation
     /// Subscription timeout which does not start any scheduled events and always returns `true`.
     /// This specialized implementation is to be used for "noop" timeout mode.
     /// </summary>
+    [InternalApi]
     public sealed class NoopSubscriptionTimeout : ICancelable
     {
         /// <summary>

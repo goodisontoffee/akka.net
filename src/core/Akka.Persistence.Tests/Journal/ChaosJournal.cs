@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ChaosJournal.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -13,6 +13,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Persistence.Journal;
+using Akka.Configuration;
 
 namespace Akka.Persistence.Tests.Journal
 {
@@ -49,10 +50,13 @@ namespace Akka.Persistence.Tests.Journal
         public ChaosJournal()
         {
             var config = Context.System.Settings.Config.GetConfig("akka.persistence.journal.chaos");
-            _writeFailureRate = config.GetDouble("write-failure-rate");
-            _deleteFailureRate = config.GetDouble("delete-failure-rate");
-            _replayFailureRate = config.GetDouble("replay-failure-rate");
-            _readHighestFailureRate = config.GetDouble("read-highest-failure-rate");
+            if (config.IsNullOrEmpty())
+                throw ConfigurationException.NullOrEmptyConfig<ChaosJournal>("akka.persistence.journal.chaos");
+
+            _writeFailureRate = config.GetDouble("write-failure-rate", 0);
+            _deleteFailureRate = config.GetDouble("delete-failure-rate", 0);
+            _replayFailureRate = config.GetDouble("replay-failure-rate", 0);
+            _readHighestFailureRate = config.GetDouble("read-highest-failure-rate", 0);
         }
 
         public override Task ReplayMessagesAsync(IActorContext context, string persistenceId, long fromSequenceNr, long toSequenceNr, long max, Action<IPersistentRepresentation> recoveryCallback)
@@ -145,8 +149,7 @@ namespace Akka.Persistence.Tests.Journal
 
         public Messages Update(string pid, long seqNr, Func<IPersistentRepresentation, IPersistentRepresentation> updater)
         {
-            LinkedList<IPersistentRepresentation> persistents;
-            if (_messages.TryGetValue(pid, out persistents))
+            if (_messages.TryGetValue(pid, out var persistents))
             {
                 var node = persistents.First;
                 while (node != null)
@@ -163,8 +166,7 @@ namespace Akka.Persistence.Tests.Journal
 
         public Messages Delete(string pid, long seqNr)
         {
-            LinkedList<IPersistentRepresentation> persistents;
-            if (_messages.TryGetValue(pid, out persistents))
+            if (_messages.TryGetValue(pid, out var persistents))
             {
                 var node = persistents.First;
                 while (node != null)
@@ -181,8 +183,7 @@ namespace Akka.Persistence.Tests.Journal
 
         public IEnumerable<IPersistentRepresentation> Read(string pid, long fromSeqNr, long toSeqNr, long max)
         {
-            LinkedList<IPersistentRepresentation> persistents;
-            if (_messages.TryGetValue(pid, out persistents))
+            if (_messages.TryGetValue(pid, out var persistents))
             {
                 return persistents
                     .Where(x => x.SequenceNr >= fromSeqNr && x.SequenceNr <= toSeqNr)
@@ -194,11 +195,10 @@ namespace Akka.Persistence.Tests.Journal
 
         public long HighestSequenceNr(string pid)
         {
-            LinkedList<IPersistentRepresentation> persistents;
-            if (_messages.TryGetValue(pid, out persistents))
+            if (_messages.TryGetValue(pid, out var persistents))
             {
                 var last = persistents.LastOrDefault();
-                return last != null ? last.SequenceNr : 0L;
+                return last?.SequenceNr ?? 0L;
             }
 
             return 0L;

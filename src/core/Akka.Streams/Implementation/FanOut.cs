@@ -1,7 +1,7 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="FanOut.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using Akka.Actor;
+using Akka.Annotations;
 using Akka.Event;
 using Akka.Pattern;
 using Reactive.Streams;
@@ -395,6 +396,7 @@ namespace Akka.Streams.Implementation
     /// <summary>
     /// INTERNAL API
     /// </summary>
+    [InternalApi]
     public static class FanOut
     {
         /// <summary>
@@ -527,6 +529,7 @@ namespace Akka.Streams.Implementation
     /// INTERNAL API
     /// </summary>
     /// <typeparam name="T">TBD</typeparam>
+    [InternalApi]
     public abstract class FanOut<T> : ActorBase, IPump
     {
 
@@ -732,9 +735,8 @@ namespace Akka.Streams.Implementation
             InitialPhase(1, new TransferPhase(PrimaryInputs.NeedsInput.And(OutputBunch.AllOfMarkedOutputs), () =>
             {
                 var message = PrimaryInputs.DequeueInputElement();
-                var tuple = message as Tuple<T, T>;
 
-                if (tuple == null)
+                if (!(message is ValueTuple<T, T> tuple))
                     throw new ArgumentException($"Unable to unzip elements of type {message.GetType().Name}");
 
                 OutputBunch.Enqueue(0, tuple.Item1);

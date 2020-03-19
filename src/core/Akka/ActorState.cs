@@ -1,18 +1,19 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorState.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System.Collections.Generic;
+using Akka.Util;
 
 namespace Akka.Actor
 {
     /// <summary>
     /// This interface represents the parts of the internal actor state; the behavior stack, watched by, watching and termination queue
     /// </summary>
-    internal interface IActorState
+    internal interface IActorState 
     {
         /// <summary>
         /// Removes the provided <see cref="IActorRef"/> from the `Watching` set
@@ -30,31 +31,39 @@ namespace Akka.Actor
         /// Removes the provided <see cref="IActorRef"/> from the `Termination queue` set
         /// </summary>
         /// <param name="actor">The <see cref="IActorRef"/> to be removed</param>
-        /// <returns>TBD</returns>
-        IActorState RemoveTerminated(IActorRef actor);
+        /// <returns>Updated state and custom terminated message, if any</returns>
+        (IActorState State, Option<object> CustomMessage) RemoveTerminated(IActorRef actor);
         /// <summary>
         /// Adds the provided <see cref="IActorRef"/> to the `Watching` set
         /// </summary>
         /// <param name="actor">The <see cref="IActorRef"/> to be added</param>
+        /// <param name="message">The message sent on termination, None for default <see cref="Terminated"/> message</param>
         /// <returns>TBD</returns>
-        IActorState AddWatching(IActorRef actor);
+        IActorState AddWatching(IActorRef actor, Option<object> message);
         /// <summary>
         /// Adds the provided <see cref="IActorRef"/> to the `WatchedBy` set
         /// </summary>
         /// <param name="actor">The <see cref="IActorRef"/> to be added</param>
         /// <returns>TBD</returns>
         IActorState AddWatchedBy(IActorRef actor);
+
         /// <summary>
-        /// Adds the provided <see cref="IActorRef"/> to the `Termination queue` set
+        /// Adds the provided <see cref="IActorRef"/> to the `Termination queue` set, with optional custom terminated message
         /// </summary>
         /// <param name="actor">The <see cref="IActorRef"/> to be added</param>
-        /// <returns>TBD</returns>
-        IActorState AddTerminated(IActorRef actor);
+        /// <param name="customMessage">Optional custom terminated message</param>
+        /// <returns>Updated state</returns>
+        IActorState AddTerminated(IActorRef actor, Option<object> customMessage);
         /// <summary>
         /// Clears the `Watching` set
         /// </summary>
         /// <returns>TBD</returns>
         IActorState ClearWatching();
+        /// <summary>
+        /// Clears the `WatchedBy` set
+        /// </summary>
+        /// <returns>TBD</returns>
+        IActorState ClearWatchedBy();
         /// <summary>
         /// Clears the `Termination queue` set
         /// </summary>
@@ -89,6 +98,16 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         bool ContainsWatching(IActorRef actor);
         /// <summary>
+        /// Determines whether the provided <see cref="IActorRef"/> is present in the `Watching` set 
+        /// and retrieves the potential custom termination message
+        /// </summary>
+        /// <param name="actor">The <see cref="IActorRef"/> to locate in the `Watching` set</param>
+        /// <param name="msg">
+        /// The custom termination message or None if the default <see cref="Terminated"/> message is expected
+        /// </param>
+        /// <returns></returns>
+        bool TryGetWatching(IActorRef actor, out Option<object> msg);
+        /// <summary>
         /// Determines whether the provided <see cref="IActorRef"/> is present in the `WatchedBy` set
         /// </summary>
         /// <param name="actor">The <see cref="IActorRef"/> to locate in the `WatchedBy` set</param>
@@ -114,7 +133,7 @@ namespace Akka.Actor
         /// Returns an <see cref="IEnumerable{IActorRef}"/> over the `Termination queue` set
         /// </summary>
         /// <returns>TBD</returns>
-        IEnumerable<IActorRef> Getterminated();
+        IEnumerable<IActorRef> GetTerminated();
         /// <summary>
         /// Returns the top level receive behavior from the behavior stack
         /// </summary>
@@ -158,19 +177,20 @@ namespace Akka.Actor
         /// </summary>
         /// <param name="actor">TBD</param>
         /// <returns>TBD</returns>
-        public IActorState RemoveTerminated(IActorRef actor)
+        public (IActorState, Option<object>) RemoveTerminated(IActorRef actor)
         {
-            return this;
+            return (this, Option<object>.None);
         }
 
         /// <summary>
         /// TBD
         /// </summary>
         /// <param name="actor">TBD</param>
+        /// <param name="msg">TBD</param>
         /// <returns>TBD</returns>
-        public IActorState AddWatching(IActorRef actor)
+        public IActorState AddWatching(IActorRef actor, Option<object> msg)
         {
-            return GetFullState().AddWatching(actor);
+            return GetFullState().AddWatching(actor, msg);
         }
 
         /// <summary>
@@ -206,15 +226,16 @@ namespace Akka.Actor
         }
 
         /// <summary>
-        /// TBD
+        /// Adds terminated actor with optional custom terminated message
         /// </summary>
-        /// <param name="actor">TBD</param>
-        /// <returns>TBD</returns>
-        public IActorState AddTerminated(IActorRef actor)
+        /// <param name="actor">Terminated actor</param>
+        /// <param name="customMessage">Custom terminated message</param>
+        /// <returns>Updated state</returns>
+        public IActorState AddTerminated(IActorRef actor, Option<object> customMessage)
         {
-            return GetFullState().AddTerminated(actor);
+            return GetFullState().AddTerminated(actor, customMessage);
         }
-
+        
         /// <summary>
         /// TBD
         /// </summary>
@@ -223,6 +244,17 @@ namespace Akka.Actor
         public bool ContainsWatching(IActorRef actor)
         {
             return false;
+        }
+
+        /// <summary>
+        /// TBD
+        /// </summary>
+        /// <param name="actor">TBD</param>
+        /// <param name="msg">TBD</param>
+        /// <returns>TBD</returns>
+        public bool TryGetWatching(IActorRef actor, out Option<object> msg)
+        {
+            return GetFullState().TryGetWatching(actor, out msg);
         }
 
         /// <summary>
@@ -271,7 +303,7 @@ namespace Akka.Actor
         /// TBD
         /// </summary>
         /// <returns>TBD</returns>
-        public IEnumerable<IActorRef> Getterminated()
+        public IEnumerable<IActorRef> GetTerminated()
         {
             yield break;
         }
@@ -282,6 +314,16 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         public IActorState ClearWatching()
         {
+            return this;
+        }
+
+        /// <summary>
+        /// TBD
+        /// </summary>
+        /// <returns>TBD</returns>
+        public IActorState ClearWatchedBy()
+        {
+            _watchedBy = null;
             return this;
         }
 
@@ -361,9 +403,9 @@ namespace Akka.Actor
     /// </summary>
     internal class FullActorState : IActorState
     {
-        private readonly HashSet<IActorRef> _watching = new HashSet<IActorRef>();
+        private readonly Dictionary<IActorRef, Option<object>> _watching = new Dictionary<IActorRef, Option<object>>();
         private readonly HashSet<IActorRef> _watchedBy = new HashSet<IActorRef>();
-        private readonly HashSet<IActorRef> _terminatedQueue = new HashSet<IActorRef>();//terminatedqueue should never be used outside the message loop
+        private readonly Dictionary<IActorRef, Option<object>> _terminatedQueue = new Dictionary<IActorRef, Option<object>>(); //terminatedqueue should never be used outside the message loop
         private Stack<Receive> _behaviorStack = new Stack<Receive>(2);
         /// <summary>
         /// TBD
@@ -392,20 +434,25 @@ namespace Akka.Actor
         /// </summary>
         /// <param name="actor">TBD</param>
         /// <returns>TBD</returns>
-        public IActorState RemoveTerminated(IActorRef actor)
+        public (IActorState, Option<object>) RemoveTerminated(IActorRef actor)
         {
+            if (!_terminatedQueue.ContainsKey(actor)) 
+                return (this, Option<object>.None);
+            
+            var customMessage = _terminatedQueue[actor];
             _terminatedQueue.Remove(actor);
-            return this;
+            return (this, customMessage);
         }
 
         /// <summary>
         /// TBD
         /// </summary>
         /// <param name="actor">TBD</param>
+        /// <param name="msg">TBD</param>
         /// <returns>TBD</returns>
-        public IActorState AddWatching(IActorRef actor)
+        public IActorState AddWatching(IActorRef actor, Option<object> msg)
         {
-            _watching.Add(actor);
+            _watching.Add(actor, msg);
             return this;
         }
 
@@ -421,13 +468,16 @@ namespace Akka.Actor
         }
 
         /// <summary>
-        /// TBD
+        /// Adds terminated actor with optional custom terminated message
         /// </summary>
-        /// <param name="actor">TBD</param>
-        /// <returns>TBD</returns>
-        public IActorState AddTerminated(IActorRef actor)
+        /// <param name="actor">Terminated actor</param>
+        /// <param name="customMessage">Custom terminated message</param>
+        /// <returns>Updated state</returns>
+        public IActorState AddTerminated(IActorRef actor, Option<object> customMessage)
         {
-            _terminatedQueue.Add(actor);
+            if (!_terminatedQueue.ContainsKey(actor))
+                _terminatedQueue.Add(actor, customMessage);
+            
             return this;
         }
 
@@ -439,7 +489,18 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         public bool ContainsWatching(IActorRef actor)
         {
-            return _watching.Contains(actor);
+            return _watching.ContainsKey(actor);
+        }
+
+        /// <summary>
+        /// TBD
+        /// </summary>
+        /// <param name="actor">TBD</param>
+        /// <param name="msg">TBD</param>
+        /// <returns>TBD</returns>
+        public bool TryGetWatching(IActorRef actor, out Option<object> msg)
+        {
+            return _watching.TryGetValue(actor, out msg);
         }
 
         /// <summary>
@@ -459,7 +520,7 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         public bool ContainsTerminated(IActorRef actor)
         {
-            return _terminatedQueue.Contains(actor);
+            return _terminatedQueue.ContainsKey(actor);
         }
 
         /// <summary>
@@ -468,7 +529,7 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         public IEnumerable<IActorRef> GetWatching()
         {
-            return _watching;
+            return _watching.Keys;
         }
 
         /// <summary>
@@ -484,9 +545,9 @@ namespace Akka.Actor
         /// TBD
         /// </summary>
         /// <returns>TBD</returns>
-        public IEnumerable<IActorRef> Getterminated()
+        public IEnumerable<IActorRef> GetTerminated()
         {
-            return _terminatedQueue;
+            return _terminatedQueue.Keys;
         }
 
 
@@ -497,6 +558,17 @@ namespace Akka.Actor
         public IActorState ClearWatching()
         {
             _watching.Clear();
+            return this;
+        }
+
+
+        /// <summary>
+        /// TBD
+        /// </summary>
+        /// <returns>TBD</returns>
+        public IActorState ClearWatchedBy()
+        {
+            _watchedBy.Clear();
             return this;
         }
 

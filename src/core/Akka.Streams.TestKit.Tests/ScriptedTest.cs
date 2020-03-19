@@ -1,7 +1,7 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="ScriptedTest.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.Serialization;
 using Akka.Actor;
 using Akka.Configuration;
@@ -26,14 +27,17 @@ namespace Akka.Streams.TestKit.Tests
         public ScriptException() { }
         public ScriptException(string message) : base(message) { }
         public ScriptException(string message, Exception inner) : base(message, inner) { }
+
+#if SERIALIZATION
         protected ScriptException(SerializationInfo info, StreamingContext context) : base(info, context) { }
+#endif
     }
 
     public abstract class ScriptedTest : AkkaSpec
     {
         protected static class Script
         {
-            public static Script<TIn, TOut> Create<TIn, TOut>(params Tuple<ICollection<TIn>, ICollection<TOut>>[] phases)
+            public static Script<TIn, TOut> Create<TIn, TOut>(params (ICollection<TIn>, ICollection<TOut>)[] phases)
             {
                 var providedInputs = new List<TIn>();
                 var expectedOutputs = new List<TOut>();
@@ -90,13 +94,13 @@ namespace Akka.Streams.TestKit.Tests
             public bool NoInputsPending => PendingInputs == 0;
             public bool SomeInputsPending => !NoInputsPending;
 
-            public Tuple<TIn, Script<TIn, TOut>> ProvideInput()
+            public (TIn, Script<TIn, TOut>) ProvideInput()
             {
                 if (NoInputsPending)
                     throw new ScriptException("Script cannot provide more inputs");
 
                 var script = new Script<TIn, TOut>(ProvidedInputs, ExpectedOutputs, Jumps, InputCursor + 1, OutputCursor, OutputEndCursor + Jumps[InputCursor], Completed);
-                return Tuple.Create(ProvidedInputs[InputCursor], script);
+                return (ProvidedInputs[InputCursor], script);
             }
 
             public Script<TIn, TOut> ConsumeOutput(TOut output)
@@ -196,17 +200,17 @@ namespace Akka.Streams.TestKit.Tests
 
             public bool ShakeIt()
             {
-                var oneMilli = TimeSpan.FromMilliseconds(1);
+                var oneMilli = TimeSpan.FromMilliseconds(10);
                 var marker = new object();
                 var u = Upstream.ReceiveWhile(oneMilli, filter: msg =>
                 {
-                    if (msg is TestPublisher.RequestMore)
+                    if (msg is TestPublisher.RequestMore more)
                     {
-                        var more = (TestPublisher.RequestMore)msg;
                         DebugLog($"Operation requests {more.NrOfElements}");
                         _pendingRequests += more.NrOfElements;
                         return marker;
                     }
+                    DebugLog($"Operation received {msg}");
                     return null;
                 });
                 var d = Downstream.ReceiveWhile(oneMilli, filter: msg => msg.Match()
@@ -219,6 +223,7 @@ namespace Akka.Streams.TestKit.Tests
                     })
                     .With<TestSubscriber.OnComplete>(complete =>
                     {
+                        DebugLog("Operation complete.");
                         _currentScript = _currentScript.Complete();
                     })
                     .With<TestSubscriber.OnError>(error =>
@@ -242,6 +247,7 @@ namespace Akka.Streams.TestKit.Tests
                     var idleRounds = 0;
                     while (true)
                     {
+   
                         if (idleRounds > 250) throw new Exception("Too many idle rounds");
                         if (_currentScript.Completed)
                             break;
@@ -270,6 +276,7 @@ namespace Akka.Streams.TestKit.Tests
                                 DebugLog("Test environment completes");
                                 UpstreamSubscription.SendComplete();
                                 _completed = true;
+                                return; // don't execute again if completed
                             }
                         }
                     }

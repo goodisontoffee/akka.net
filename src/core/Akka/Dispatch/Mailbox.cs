@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Mailbox.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -105,7 +105,7 @@ namespace Akka.Dispatch
         /// <summary>
         ///     Posts the specified envelope to the mailbox.
         /// </summary>
-        /// <param name="receiver">TBD</param>
+        /// <param name="receiver">The actor sending this message to the mailbox</param>
         /// <param name="envelope">The envelope.</param>
         internal void Enqueue(IActorRef receiver, Envelope envelope)
         {
@@ -375,8 +375,7 @@ namespace Akka.Dispatch
         {
             while (ShouldProcessMessage())
             {
-                Envelope next;
-                if (!TryDequeue(out next)) return;
+                if (!TryDequeue(out var next)) return;
 
                 DebugPrint("{0} processing message {1}", Actor.Self, next);
 
@@ -410,10 +409,12 @@ namespace Akka.Dispatch
                 msg.Unlink();
                 DebugPrint("{0} processing system message {1} with {2}", Actor.Self, msg, string.Join(",", Actor.GetChildren()));
                 // we know here that SystemInvoke ensures that only "fatal" exceptions get rethrown
+#if UNSAFE_THREADING
                 try
                 {
                     Actor.SystemInvoke(msg);
                 }
+
                 catch (ThreadInterruptedException ex)
                 // thrown only if thread is explicitly interrupted, which should never happen
                 {
@@ -423,6 +424,9 @@ namespace Akka.Dispatch
                 {
                     interruption = ex;
                 }
+#else 
+                Actor.SystemInvoke(msg);
+#endif
 
                 // don't ever execute normal message when system message present!
                 if (messageList.IsEmpty && !IsClosed())
@@ -443,6 +447,7 @@ namespace Akka.Dispatch
                 {
                     dlm.SystemEnqueue(Actor.Self, msg);
                 }
+#if UNSAFE_THREADING
                 catch (ThreadInterruptedException ex)
                 // thrown only if thread is explicitly interrupted, which should never happen
                 {
@@ -452,6 +457,7 @@ namespace Akka.Dispatch
                 {
                     interruption = ex;
                 }
+#endif
                 catch (Exception ex)
                 {
                     Actor.System.EventStream.Publish(new Error(ex, GetType().FullName, GetType(), $"error while enqueuing {msg} to deadletters: {ex.Message}"));
@@ -658,7 +664,10 @@ namespace Akka.Dispatch
         /// </exception>
         public BoundedMailbox(Settings settings, Config config) : base(settings, config)
         {
-            Capacity = config.GetInt("mailbox-capacity");
+            if (config.IsNullOrEmpty())
+                throw ConfigurationException.NullOrEmptyConfig<BoundedMailbox>();
+
+            Capacity = config.GetInt("mailbox-capacity", 0);
             PushTimeout = config.GetTimeSpan("mailbox-push-timeout-time", TimeSpan.FromSeconds(-1));
 
             if (Capacity < 0) throw new ArgumentException("The capacity for BoundedMailbox cannot be negative", nameof(config));
@@ -676,7 +685,7 @@ namespace Akka.Dispatch
     /// Priority mailbox base class; unbounded mailbox that allows for prioritization of its contents.
     /// Extend this class and implement the <see cref="PriorityGenerator"/> method with your own prioritization.
     /// The value returned by the <see cref="PriorityGenerator"/> method will be used to order the message in the mailbox.
-    /// Lower values will be delivered first. Messages ordered by the same number will remain in delivery order.
+    /// Lower values will be delivered first. Messages ordered by the same number will remain in delivered in undefined order.
     /// </summary>
     public abstract class UnboundedPriorityMailbox : MailboxType, IProducesMessageQueue<UnboundedPriorityMessageQueue>
     {
@@ -710,7 +719,45 @@ namespace Akka.Dispatch
         }
     }
 
-    //todo: bounded priority mailbox; stable priority mailboxes
+    //todo: bounded priority mailbox;
+
+    /// <summary>
+    /// Priority mailbox - an unbounded mailbox that allows for prioritization of its contents.
+    /// Extend this class and implement the <see cref="PriorityGenerator"/> method with your own prioritization.
+    /// The value returned by the <see cref="PriorityGenerator"/> method will be used to order the message in the mailbox.
+    /// Lower values will be delivered first. Messages ordered by the same number will remain in delivery order.
+    /// </summary>
+    public abstract class UnboundedStablePriorityMailbox : MailboxType, IProducesMessageQueue<UnboundedStablePriorityMessageQueue>
+    {
+        /// <summary>
+        /// Function responsible for generating the priority value of a message based on its type and content.
+        /// </summary>
+        /// <param name="message">The message to inspect.</param>
+        /// <returns>An integer. The lower the value, the higher the priority.</returns>
+        protected abstract int PriorityGenerator(object message);
+
+        /// <summary>
+        /// The initial capacity of the unbounded mailbox.
+        /// </summary>
+        public int InitialCapacity { get; }
+
+        /// <summary>
+        /// The default capacity of an unbounded priority mailbox.
+        /// </summary>
+        public const int DefaultCapacity = 11;
+
+        /// <inheritdoc cref="MailboxType"/>
+        public sealed override IMessageQueue Create(IActorRef owner, ActorSystem system)
+        {
+            return new UnboundedStablePriorityMessageQueue(PriorityGenerator, InitialCapacity);
+        }
+
+        /// <inheritdoc cref="MailboxType"/>
+        protected UnboundedStablePriorityMailbox(Settings settings, Config config) : base(settings, config)
+        {
+            InitialCapacity = DefaultCapacity;
+        }
+    }
 
     /// <summary>
     /// UnboundedDequeBasedMailbox is an unbounded <see cref="MailboxType"/> backed by a double-ended queue. Used for stashing.
@@ -752,7 +799,10 @@ namespace Akka.Dispatch
         /// </exception>
         public BoundedDequeBasedMailbox(Settings settings, Config config) : base(settings, config)
         {
-            Capacity = config.GetInt("mailbox-capacity");
+            if (config.IsNullOrEmpty())
+                throw ConfigurationException.NullOrEmptyConfig<BoundedDequeBasedMailbox>();
+
+            Capacity = config.GetInt("mailbox-capacity", 0);
             PushTimeout = config.GetTimeSpan("mailbox-push-timeout-time", TimeSpan.FromSeconds(-1));
 
             if (Capacity < 0) throw new ArgumentException("The capacity for BoundedMailbox cannot be negative", nameof(config));

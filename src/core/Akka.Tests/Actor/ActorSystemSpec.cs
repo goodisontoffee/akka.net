@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorSystemSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -74,7 +74,8 @@ namespace Akka.Tests.Actor
             var eventFilter = new EventFilterFactory(new TestKit.Xunit2.TestKit(system));
 
             // Notice here we forcedly start actor system again to monitor how it processes
-            eventFilter.Info("{\r\n  akka : {\r\n    log-config-on-start : on\r\n  }\r\n}").ExpectOne(() => system.Start());
+            var expected = "log-config-on-start : on";
+            eventFilter.Info(contains:expected).ExpectOne(() => system.Start());
 
             system.Terminate();
         }
@@ -103,6 +104,26 @@ namespace Akka.Tests.Actor
             ActorSystem
                 .Create("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
                 .Terminate();
+        }
+
+        [Fact]
+        public void Log_dead_letters()
+        {
+            var sys = ActorSystem.Create("LogDeadLetters", ConfigurationFactory.ParseString("akka.loglevel=INFO")
+                .WithFallback(DefaultConfig));
+
+            try
+            {
+                var a = sys.ActorOf(Props.Create<Terminater>());
+
+                var eventFilter = new EventFilterFactory(new TestKit.Xunit2.TestKit(sys));
+                eventFilter.Info(contains: "not delivered").Expect(1, () =>
+                {
+                    a.Tell("run");
+                    a.Tell("boom");
+                });
+            }
+            finally { Shutdown(sys); }
         }
 
         [Fact]
@@ -242,8 +263,7 @@ namespace Akka.Tests.Actor
 
             var nonTerminatedOrNonstartedActors = created.Cast<ActorRefWithCell>()
                 .Where(actor => !actor.IsTerminated && !(actor.Underlying is UnstartedCell)).ToList();
-            Assert.Equal(0, 
-                nonTerminatedOrNonstartedActors.Count);
+            Assert.Empty(nonTerminatedOrNonstartedActors);
         }
 
         #region Extensions tests

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="JsonFramingSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -16,6 +16,7 @@ using Akka.Streams.TestKit;
 using Akka.Streams.TestKit.Tests;
 using Akka.Streams.Util;
 using Akka.TestKit;
+using Akka.Util;
 using Akka.Util.Internal;
 using FluentAssertions;
 using Xunit;
@@ -46,7 +47,7 @@ namespace Akka.Streams.Tests.Dsl
                 .Via(JsonFraming.ObjectScanner(int.MaxValue))
                 .RunAggregate(new List<string>(), (list, s) =>
                 {
-                    list.Add(s.DecodeString());
+                    list.Add(s.ToString());
                     return list;
                 }, Materializer);
 
@@ -71,7 +72,7 @@ namespace Akka.Streams.Tests.Dsl
                 .Take(1)
                 .RunAggregate(new List<string>(), (list, s) =>
                 {
-                    list.Add(s.DecodeString());
+                    list.Add(s.ToString());
                     return list;
                 }, Materializer);
 
@@ -91,7 +92,7 @@ namespace Akka.Streams.Tests.Dsl
                 .Via(JsonFraming.ObjectScanner(int.MaxValue))
                 .RunAggregate(new List<string>(), (list, s) =>
                 {
-                    list.Add(s.DecodeString());
+                    list.Add(s.ToString());
                     return list;
                 }, Materializer);
 
@@ -114,7 +115,7 @@ namespace Akka.Streams.Tests.Dsl
                 .Via(JsonFraming.ObjectScanner(int.MaxValue))
                 .RunAggregate(new List<string>(), (list, s) =>
                 {
-                    list.Add(s.DecodeString());
+                    list.Add(s.ToString());
                     return list;
                 }, Materializer);
 
@@ -141,12 +142,13 @@ namespace Akka.Streams.Tests.Dsl
                 .Via(JsonFraming.ObjectScanner(int.MaxValue))
                 .RunAggregate(new List<string>(), (list, s) =>
                 {
-                    list.Add(s.DecodeString());
+                    list.Add(s.ToString());
                     return list;
-                }, Materializer);
+                }, Materializer)
+                .AwaitResult();
 
 
-            result.AwaitResult().ShouldAllBeEquivalentTo(new[]
+            result.ShouldAllBeEquivalentTo(new[]
             {
                 @"{ ""name"" : ""john"" }",
                 @"{ ""name"" : ""jack"" }"
@@ -162,7 +164,7 @@ namespace Akka.Streams.Tests.Dsl
             var result =
                 Source.FromPublisher(input)
                     .Via(JsonFraming.ObjectScanner(int.MaxValue))
-                    .Select(b => b.DecodeString())
+                    .Select(b => b.ToString())
                     .RunWith(Sink.FromSubscriber(output), Materializer);
 
             output.Request(1);
@@ -192,7 +194,7 @@ namespace Akka.Streams.Tests.Dsl
         {
             var buffer = new JsonObjectParser();
             buffer.Offer(ByteString.FromString("{}"));
-            buffer.Poll().Value.DecodeString().Should().Be("{}");
+            buffer.Poll().Value.ToString().Should().Be("{}");
         }
 
         [Fact]
@@ -200,7 +202,7 @@ namespace Akka.Streams.Tests.Dsl
         {
             var buffer = new JsonObjectParser();
             buffer.Offer(ByteString.FromString("{ \"name\": \"john\" }"));
-            buffer.Poll().Value.DecodeString().Should().Be("{ \"name\": \"john\" }");
+            buffer.Poll().Value.ToString().Should().Be("{ \"name\": \"john\" }");
         }
 
         [Fact] 
@@ -208,7 +210,7 @@ namespace Akka.Streams.Tests.Dsl
         {
             var buffer = new JsonObjectParser();
             buffer.Offer(ByteString.FromString("{ \"name\": \"john doe\" }"));
-            buffer.Poll().Value.DecodeString().Should().Be("{ \"name\": \"john doe\" }");
+            buffer.Poll().Value.ToString().Should().Be("{ \"name\": \"john doe\" }");
         }
 
         [Fact]
@@ -216,7 +218,7 @@ namespace Akka.Streams.Tests.Dsl
         {
             var buffer = new JsonObjectParser();
             buffer.Offer(ByteString.FromString("{ \"name\": \"john o'doe\" }"));
-            buffer.Poll().Value.DecodeString().Should().Be("{ \"name\": \"john o'doe\" }");
+            buffer.Poll().Value.ToString().Should().Be("{ \"name\": \"john o'doe\" }");
         }
 
         [Fact]
@@ -228,7 +230,7 @@ namespace Akka.Streams.Tests.Dsl
             buffer.Offer(ByteString.FromString("}"));
             buffer.Offer(ByteString.FromString("\""));
             buffer.Offer(ByteString.FromString("}"));
-            buffer.Poll().Value.DecodeString().Should().Be("{ \"name\": \"john{}\"}");
+            buffer.Poll().Value.ToString().Should().Be("{ \"name\": \"john{}\"}");
         }
 
         [Fact]
@@ -244,7 +246,7 @@ namespace Akka.Streams.Tests.Dsl
             buffer.Offer(ByteString.FromString("hey"));
             buffer.Offer(ByteString.FromString("\""));
             buffer.Offer(ByteString.FromString("}"));
-            buffer.Poll().Value.DecodeString().Should().Be("{ \"name\": \"john\\\"{}\\\" hey\"}");
+            buffer.Poll().Value.ToString().Should().Be("{ \"name\": \"john\\\"{}\\\" hey\"}");
         }
 
         [Fact]
@@ -252,7 +254,7 @@ namespace Akka.Streams.Tests.Dsl
         {
             var buffer = new JsonObjectParser();
             buffer.Offer(ByteString.FromString("{ \"age\" : 101}"));
-            buffer.Poll().Value.DecodeString().Should().Be("{ \"age\" : 101}");
+            buffer.Poll().Value.ToString().Should().Be("{ \"age\" : 101}");
         }
 
         [Fact]
@@ -260,7 +262,7 @@ namespace Akka.Streams.Tests.Dsl
         {
             var buffer = new JsonObjectParser();
             buffer.Offer(ByteString.FromString("{ \"age\" : 10.1}"));
-            buffer.Poll().Value.DecodeString().Should().Be("{ \"age\" : 10.1}");
+            buffer.Poll().Value.ToString().Should().Be("{ \"age\" : 10.1}");
         }
 
         [Fact]
@@ -275,7 +277,7 @@ namespace Akka.Streams.Tests.Dsl
                                    "  }" +
                                    "}";
             buffer.Offer(ByteString.FromString(content));
-            buffer.Poll().Value.DecodeString().Should().Be(content);
+            buffer.Poll().Value.ToString().Should().Be(content);
         }
 
         [Fact]
@@ -293,7 +295,28 @@ namespace Akka.Streams.Tests.Dsl
                                    "  }" +
                                    "}";
             buffer.Offer(ByteString.FromString(content));
-            buffer.Poll().Value.DecodeString().Should().Be(content);
+            buffer.Poll().Value.ToString().Should().Be(content);
+        }
+
+        [Fact]
+        public void Collecting_json_buffer_when_valid_json_is_supplied_which_has_one_object_should_successfully_parse_an_escaped_backslash_followed_by_a_double_quote()
+        {
+            var buffer = new JsonObjectParser();
+            const string content = @"{ ""key"": ""\\"" }";
+
+            buffer.Offer(ByteString.FromString(content));
+            buffer.Poll().Value.ToString().Should().Be(content);
+        }
+
+
+        [Fact]
+        public void Collecting_json_buffer_when_valid_json_is_supplied_which_has_one_object_should_successfully_parse_a_string_that_contains_an_escaped_quote()
+        {
+            var buffer = new JsonObjectParser();
+            const string content = "{ \"key\": \"\\\"\" }";
+
+            buffer.Offer(ByteString.FromString(content));
+            buffer.Poll().Value.ToString().Should().Be(content);
         }
 
         [Fact]
@@ -309,7 +332,7 @@ namespace Akka.Streams.Tests.Dsl
                                    "  ]" +
                                    "}";
             buffer.Offer(ByteString.FromString(content));
-            buffer.Poll().Value.DecodeString().Should().Be(content);
+            buffer.Poll().Value.ToString().Should().Be(content);
         }
 
         [Fact]
@@ -339,7 +362,7 @@ namespace Akka.Streams.Tests.Dsl
                  ]
                }";
             buffer.Offer(ByteString.FromString(content));
-            buffer.Poll().Value.DecodeString().Should().Be(content);
+            buffer.Poll().Value.ToString().Should().Be(content);
         }
 
         [Fact]
@@ -348,7 +371,7 @@ namespace Akka.Streams.Tests.Dsl
             var buffer = new JsonObjectParser();
             const string content = "{ \"name\": \"john\", \"age\" : 101}";
             buffer.Offer(ByteString.FromString(content));
-            buffer.Poll().Value.DecodeString().Should().Be(content);
+            buffer.Poll().Value.ToString().Should().Be(content);
         }
 
         [Fact]
@@ -360,7 +383,7 @@ namespace Akka.Streams.Tests.Dsl
                                    "{ \"name\": \"john\"" +
                                    ", \"age\" : 101}";
             buffer.Offer(ByteString.FromString(content));
-            buffer.Poll().Value.DecodeString().Should().Be(content.TrimStart());
+            buffer.Poll().Value.ToString().Should().Be(content.TrimStart());
         }
 
         [Fact]
@@ -376,15 +399,15 @@ namespace Akka.Streams.Tests.Dsl
                  ""age"": 25
                }";
             buffer.Offer(ByteString.FromString(input1 + "," + input2));
-            buffer.Poll().Value.DecodeString().Should().Be(input1);
-            buffer.Poll().Value.DecodeString().Should().Be(input2);
+            buffer.Poll().Value.ToString().Should().Be(input1);
+            buffer.Poll().Value.ToString().Should().Be(input2);
 
             buffer.Poll().Should().Be(Option<ByteString>.None);
             buffer.Offer(ByteString.FromString("{\"name\":\"jenkins\",\"age\": "));
             buffer.Poll().Should().Be(Option<ByteString>.None);
 
             buffer.Offer(ByteString.FromString("65 }"));
-            buffer.Poll().Value.DecodeString().Should().Be("{\"name\":\"jenkins\",\"age\": 65 }");
+            buffer.Poll().Value.ToString().Should().Be("{\"name\":\"jenkins\",\"age\": 65 }");
         }
 
         [Fact]
@@ -425,7 +448,7 @@ namespace Akka.Streams.Tests.Dsl
 
             var result = Source.Single(ByteString.FromString(input))
                 .Via(JsonFraming.ObjectScanner(5))
-                .Select(b => b.DecodeString())
+                .Select(b => b.ToString())
                 .RunAggregate(new List<string>(), (list, s) =>
                 {
                     list.Add(s);

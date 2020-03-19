@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DowningProviderSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -59,13 +59,13 @@ namespace Akka.Cluster.Tests
             loglevel = WARNING
             actor.provider = ""Akka.Cluster.ClusterActorRefProvider, Akka.Cluster""
             remote {
-              netty.tcp {
+              dot-netty.tcp {
                 hostname = ""127.0.0.1""
                 port = 0
               }
             }
           }
-        ").WithFallback(ConfigurationFactory.Load());
+        ");
 
         [Fact]
         public void Downing_provider_should_default_to_NoDowning()
@@ -95,24 +95,26 @@ namespace Akka.Cluster.Tests
             {
                 var downingProvider = Cluster.Get(system).DowningProvider;
                 downingProvider.Should().BeOfType<DummyDowningProvider>();
-                AwaitCondition(() => 
+                AwaitCondition(() =>
                     (downingProvider as DummyDowningProvider).ActorPropsAccessed.Value,
                     TimeSpan.FromSeconds(3));
             }
         }
 
-        [Fact]
+        [Fact(Skip = "Racy")]
         public void Downing_provider_should_stop_the_cluster_if_the_downing_provider_throws_exception_in_props()
         {
             var config = ConfigurationFactory.ParseString(
                 @"akka.cluster.downing-provider-class = ""Akka.Cluster.Tests.FailingDowningProvider, Akka.Cluster.Tests""");
-            using (var system = ActorSystem.Create("auto-downing", config.WithFallback(BaseConfig)))
-            {
-                var cluster = Cluster.Get(system);
-                cluster.Join(cluster.SelfAddress);
 
-                AwaitCondition(() => cluster.IsTerminated, TimeSpan.FromSeconds(3));
-            }
+            var system = ActorSystem.Create("auto-downing", config.WithFallback(BaseConfig));
+
+            var cluster = Cluster.Get(system);
+            cluster.Join(cluster.SelfAddress);
+
+            AwaitCondition(() => cluster.IsTerminated, TimeSpan.FromSeconds(3));
+
+            Shutdown(system);
         }
     }
 }

@@ -1,7 +1,7 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="FlowGroupBySpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -64,7 +64,7 @@ namespace Akka.Streams.Tests.Dsl
         }
 
         private void WithSubstreamsSupport(int groupCount = 2, int elementCount = 6, int maxSubstream = -1,
-            Action<TestSubscriber.ManualProbe<Tuple<int, Source<int, NotUsed>>>, ISubscription, Func<int, Source<int, NotUsed>>> run = null)
+            Action<TestSubscriber.ManualProbe<(int, Source<int, NotUsed>)>, ISubscription, Func<int, Source<int, NotUsed>>> run = null)
         {
 
             var source = Source.From(Enumerable.Range(1, elementCount)).RunWith(Sink.AsPublisher<int>(false), Materializer);
@@ -73,8 +73,8 @@ namespace Akka.Streams.Tests.Dsl
                 Source.FromPublisher(source)
                     .GroupBy(max, x => x % groupCount)
                     .Lift(x => x % groupCount)
-                    .RunWith(Sink.AsPublisher<Tuple<int, Source<int, NotUsed>>>(false), Materializer);
-            var masterSubscriber = this.CreateManualSubscriberProbe<Tuple<int, Source<int, NotUsed>>>();
+                    .RunWith(Sink.AsPublisher<(int, Source<int, NotUsed>)>(false), Materializer);
+            var masterSubscriber = this.CreateManualSubscriberProbe<(int, Source<int, NotUsed>)>();
 
             groupStream.Subscribe(masterSubscriber);
             var masterSubscription = masterSubscriber.ExpectSubscription();
@@ -92,7 +92,7 @@ namespace Akka.Streams.Tests.Dsl
         {
             var a = new byte[size];
             ThreadLocalRandom.Current.NextBytes(a);
-            return ByteString.Create(a);
+            return ByteString.FromBytes(a);
         }
 
         [Fact]
@@ -201,8 +201,8 @@ namespace Akka.Streams.Tests.Dsl
                     Source.FromPublisher(publisherProbe)
                         .GroupBy(2, x => x % 2)
                         .Lift(x => x % 2)
-                        .RunWith(Sink.AsPublisher<Tuple<int, Source<int, NotUsed>>>(false), Materializer);
-                var subscriber = this.CreateManualSubscriberProbe<Tuple<int, Source<int, NotUsed>>>();
+                        .RunWith(Sink.AsPublisher<(int, Source<int, NotUsed>)>(false), Materializer);
+                var subscriber = this.CreateManualSubscriberProbe<(int, Source<int, NotUsed>)>();
                 publisher.Subscribe(subscriber);
 
                 var upstreamSubscription = publisherProbe.ExpectSubscription();
@@ -221,8 +221,8 @@ namespace Akka.Streams.Tests.Dsl
                     Source.From(new List<int>())
                         .GroupBy(2, x => x % 2)
                         .Lift(x => x % 2)
-                        .RunWith(Sink.AsPublisher<Tuple<int, Source<int, NotUsed>>>(false), Materializer);
-                var subscriber = this.CreateManualSubscriberProbe<Tuple<int, Source<int, NotUsed>>>();
+                        .RunWith(Sink.AsPublisher<(int, Source<int, NotUsed>)>(false), Materializer);
+                var subscriber = this.CreateManualSubscriberProbe<(int, Source<int, NotUsed>)>();
                 publisher.Subscribe(subscriber);
 
                 subscriber.ExpectSubscriptionAndComplete();
@@ -239,8 +239,8 @@ namespace Akka.Streams.Tests.Dsl
                     Source.FromPublisher(publisherProbe)
                         .GroupBy(2, x => x % 2)
                         .Lift(x => x % 2)
-                        .RunWith(Sink.AsPublisher<Tuple<int, Source<int, NotUsed>>>(false), Materializer);
-                var subscriber = this.CreateManualSubscriberProbe<Tuple<int, Source<int, NotUsed>>>();
+                        .RunWith(Sink.AsPublisher<(int, Source<int, NotUsed>)>(false), Materializer);
+                var subscriber = this.CreateManualSubscriberProbe<(int, Source<int, NotUsed>)>();
                 publisher.Subscribe(subscriber);
 
                 var upstreamSubscription = publisherProbe.ExpectSubscription();
@@ -263,8 +263,8 @@ namespace Akka.Streams.Tests.Dsl
                     Source.FromPublisher(publisherProbe)
                         .GroupBy(2, x => x % 2)
                         .Lift(x => x % 2)
-                        .RunWith(Sink.AsPublisher<Tuple<int, Source<int, NotUsed>>>(false), Materializer);
-                var subscriber = this.CreateManualSubscriberProbe<Tuple<int, Source<int, NotUsed>>>();
+                        .RunWith(Sink.AsPublisher<(int, Source<int, NotUsed>)>(false), Materializer);
+                var subscriber = this.CreateManualSubscriberProbe<(int, Source<int, NotUsed>)>();
                 publisher.Subscribe(subscriber);
 
                 var upstreamSubscription = publisherProbe.ExpectSubscription();
@@ -299,10 +299,10 @@ namespace Akka.Streams.Tests.Dsl
                     return i % 2;
                 })
                     .Lift(x => x % 2)
-                    .RunWith(Sink.AsPublisher<Tuple<int, Source<int, NotUsed>>>(false), Materializer);
+                    .RunWith(Sink.AsPublisher<(int, Source<int, NotUsed>)>(false), Materializer);
 
 
-                var subscriber = this.CreateManualSubscriberProbe<Tuple<int, Source<int, NotUsed>>>();
+                var subscriber = this.CreateManualSubscriberProbe<(int, Source<int, NotUsed>)>();
                 publisher.Subscribe(subscriber);
 
                 var upstreamSubscription = publisherProbe.ExpectSubscription();
@@ -339,9 +339,9 @@ namespace Akka.Streams.Tests.Dsl
                 })
                     .Lift(x => x % 2)
                     .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
-                    .RunWith(Sink.AsPublisher<Tuple<int, Source<int, NotUsed>>>(false), Materializer);
+                    .RunWith(Sink.AsPublisher<(int, Source<int, NotUsed>)>(false), Materializer);
 
-                var subscriber = this.CreateManualSubscriberProbe<Tuple<int, Source<int, NotUsed>>>();
+                var subscriber = this.CreateManualSubscriberProbe<(int, Source<int, NotUsed>)>();
                 publisher.Subscribe(subscriber);
 
                 var upstreamSubscription = publisherProbe.ExpectSubscription();
@@ -384,7 +384,7 @@ namespace Akka.Streams.Tests.Dsl
             this.AssertAllStagesStopped(() =>
             {
                 var up = this.CreateManualPublisherProbe<int>();
-                var down = this.CreateManualSubscriberProbe<Tuple<int, Source<int, NotUsed>>>();
+                var down = this.CreateManualSubscriberProbe<(int, Source<int, NotUsed>)>();
 
                 var flowSubscriber =
                     Source.AsSubscriber<int>()
@@ -406,8 +406,8 @@ namespace Akka.Streams.Tests.Dsl
             this.AssertAllStagesStopped(() =>
             {
                 var f = Flow.Create<int>().GroupBy(1, x => x % 2).PrefixAndTail(0).MergeSubstreams();
-                var t = ((Flow<int, Tuple<IImmutableList<int>, Source<int, NotUsed>>, NotUsed>)f)
-                    .RunWith(this.SourceProbe<int>(), this.SinkProbe<Tuple<IImmutableList<int>, Source<int, NotUsed>>>(), Materializer);
+                var t = ((Flow<int, (IImmutableList<int>, Source<int, NotUsed>), NotUsed>)f)
+                    .RunWith(this.SourceProbe<int>(), this.SinkProbe<(IImmutableList<int>, Source<int, NotUsed>)>(), Materializer);
                 var up = t.Item1;
                 var down = t.Item2;
 
@@ -457,7 +457,7 @@ namespace Akka.Streams.Tests.Dsl
                 var subscriber = this.CreateManualSubscriberProbe<IEnumerable<byte>>();
 
                 var firstGroup = (Source<IEnumerable<byte>, NotUsed>)Source.FromPublisher(publisherProbe)
-                    .GroupBy(256, element => element.Head)
+                    .GroupBy(256, element => element[0])
                     .Select(b => b.Reverse())
                     .MergeSubstreams();
                 var secondGroup = (Source<IEnumerable<byte>, NotUsed>)firstGroup.GroupBy(256, bytes => bytes.First())
@@ -539,7 +539,7 @@ namespace Akka.Streams.Tests.Dsl
                 var probeShape = new SinkShape<ByteString>(new Inlet<ByteString>("ProbeSink.in"));
                 var probeSink = new ProbeSink(probeShape, props, Attributes.None);
                 Source.FromPublisher(publisherProbe)
-                    .GroupBy(100, element => Math.Abs(element.Head % 100))
+                    .GroupBy(100, element => Math.Abs(element[0] % 100))
                     .To(new Sink<ByteString, TestSubscriber.Probe<ByteString>>(probeSink))
                     .Run(materializer);
 
@@ -548,21 +548,13 @@ namespace Akka.Streams.Tests.Dsl
                 for (var i = 1; i <= 400; i++)
                 {
                     var byteString = RandomByteString(10);
-                    var index = Math.Abs(byteString.Head % 100);
+                    var index = Math.Abs(byteString[0] % 100);
 
                     upstreamSubscription.ExpectRequest();
                     upstreamSubscription.SendNext(byteString);
 
-                    if (!map.ContainsKey(index))
+                    if (map.TryGetValue(index, out var state))
                     {
-                        var probe = props.Probes[props.ProbesReaderTop].Task.AwaitResult();
-                        props.ProbesReaderTop++;
-                        map[index] = new SubFlowState(probe, false, byteString);
-                        //stream automatically requests next element 
-                    }
-                    else
-                    {
-                        var state = map[index];
                         if (state.FirstElement != null) //first element in subFlow 
                         {
                             if (!state.HasDemand)
@@ -585,6 +577,13 @@ namespace Akka.Streams.Tests.Dsl
                             props.BlockingNextElement = byteString;
                             RandomDemand(map, props);
                         }
+                    }
+                    else
+                    {
+                        var probe = props.Probes[props.ProbesReaderTop].Task.AwaitResult();
+                        props.ProbesReaderTop++;
+                        map[index] = new SubFlowState(probe, false, byteString);
+                        //stream automatically requests next element 
                     }
                 }
                 upstreamSubscription.SendComplete();
@@ -675,7 +674,7 @@ namespace Akka.Streams.Tests.Dsl
                         state.Probe.ExpectNext().ShouldBeEquivalentTo(state.FirstElement);
                         map[key] = new SubFlowState(state.Probe, false, null);
                     }
-                    else if (props.BlockingNextElement != null && Math.Abs(props.BlockingNextElement.Head % 100) == key)
+                    else if (props.BlockingNextElement != null && Math.Abs(props.BlockingNextElement[0] % 100) == key)
                     {
                         state.Probe.ExpectNext().ShouldBeEquivalentTo(props.BlockingNextElement);
                         props.BlockingNextElement = null;

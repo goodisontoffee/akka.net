@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PersistentShard.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,6 +10,8 @@ using System.Collections.Immutable;
 using Akka.Actor;
 using Akka.Persistence;
 using Akka.Util.Internal;
+using System.Threading.Tasks;
+using Akka.Event;
 
 namespace Akka.Cluster.Sharding
 {
@@ -18,196 +20,208 @@ namespace Akka.Cluster.Sharding
     using Msg = Object;
 
     /// <summary>
-    /// This actor creates children entity actors on demand that it is told to be 
+    /// This actor creates children entity actors on demand that it is told to be
     /// responsible for. It is used when `rememberEntities` is enabled.
     /// </summary>
-    public class PersistentShard : Shard
+    internal sealed class PersistentShard : PersistentActor, IShard
     {
-        /// <summary>
-        /// TBD
-        /// </summary>
-        protected int PersistCount = 0;
+        IActorContext IShard.Context => Context;
+        IActorRef IShard.Self => Self;
+        IActorRef IShard.Sender => Sender;
+        ILoggingAdapter IShard.Log => base.Log;
+        void IShard.Unhandled(object message) => base.Unhandled(message);
 
-        private readonly string _persistenceId;
-        /// <summary>
-        /// TBD
-        /// </summary>
-        public override string PersistenceId { get { return _persistenceId; } }
+        public string TypeName { get; }
+        public string ShardId { get; }
+        public Func<string, Props> EntityProps { get; }
+        public ClusterShardingSettings Settings { get; }
+        public ExtractEntityId ExtractEntityId { get; }
+        public ExtractShardId ExtractShardId { get; }
+        public object HandOffStopMessage { get; }
+        public IActorRef HandOffStopper { get; set; }
+        public Shard.ShardState State { get; set; } = Shard.ShardState.Empty;
+        public ImmutableDictionary<string, IActorRef> RefById { get; set; } = ImmutableDictionary<string, IActorRef>.Empty;
+        public ImmutableDictionary<IActorRef, string> IdByRef { get; set; } = ImmutableDictionary<IActorRef, string>.Empty;
+        public ImmutableDictionary<string, long> LastMessageTimestamp { get; set; } = ImmutableDictionary<string, long>.Empty;
+        public ImmutableHashSet<IActorRef> Passivating { get; set; } = ImmutableHashSet<IActorRef>.Empty;
+        public ImmutableDictionary<string, ImmutableList<(object, IActorRef)>> MessageBuffers { get; set; } = ImmutableDictionary<string, ImmutableList<(object, IActorRef)>>.Empty;
+        public ICancelable PassivateIdleTask { get; }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="typeName">TBD</param>
-        /// <param name="shardId">TBD</param>
-        /// <param name="entityProps">TBD</param>
-        /// <param name="settings">TBD</param>
-        /// <param name="extractEntityId">TBD</param>
-        /// <param name="extractShardId">TBD</param>
-        /// <param name="handOffStopMessage">TBD</param>
+        private EntityRecoveryStrategy RememberedEntitiesRecoveryStrategy { get; }
+
         public PersistentShard(
             string typeName,
             string shardId,
-            Props entityProps,
+            Func<string, Props> entityProps,
             ClusterShardingSettings settings,
-            IdExtractor extractEntityId,
-            ShardResolver extractShardId,
+            ExtractEntityId extractEntityId,
+            ExtractShardId extractShardId,
             object handOffStopMessage)
-            : base(typeName, shardId, entityProps, settings, extractEntityId, extractShardId, handOffStopMessage)
         {
-            _persistenceId = "/sharding/" + TypeName + "Shard/" + ShardId;
-            JournalPluginId = Settings.JournalPluginId;
-            SnapshotPluginId = Settings.SnapshotPluginId;
+            TypeName = typeName;
+            ShardId = shardId;
+            EntityProps = entityProps;
+            Settings = settings;
+            ExtractEntityId = extractEntityId;
+            ExtractShardId = extractShardId;
+            HandOffStopMessage = handOffStopMessage;
 
+            PersistenceId = "/sharding/" + TypeName + "Shard/" + ShardId;
+            JournalPluginId = settings.JournalPluginId;
+            SnapshotPluginId = settings.SnapshotPluginId;
+            RememberedEntitiesRecoveryStrategy = Settings.TunningParameters.EntityRecoveryStrategy == "constant"
+                ? EntityRecoveryStrategy.ConstantStrategy(
+                    Context.System,
+                    Settings.TunningParameters.EntityRecoveryConstantRateStrategyFrequency,
+                    Settings.TunningParameters.EntityRecoveryConstantRateStrategyNumberOfEntities)
+                : EntityRecoveryStrategy.AllStrategy;
+
+            var idleInterval = TimeSpan.FromTicks(Settings.PassivateIdleEntityAfter.Ticks / 2);
+            PassivateIdleTask = Settings.ShouldPassivateIdleEntities
+                ? Context.System.Scheduler.ScheduleTellRepeatedlyCancelable(idleInterval, idleInterval, Self, Shard.PassivateIdleTick.Instance, Self)
+                : null;
         }
 
-        private EntityRecoveryStrategy RememberedEntitiesRecoveryStrategy => Settings.TunningParameters.EntityRecoveryStrategy == "constant"
-            ? EntityRecoveryStrategy.ConstantStrategy(
-                Context.System,
-                Settings.TunningParameters.EntityRecoveryConstantRateStrategyFrequency,
-                Settings.TunningParameters.EntityRecoveryConstantRateStrategyNumberOfEntities)
-            : EntityRecoveryStrategy.AllStrategy;
+        public override string PersistenceId { get; }
+
+        protected override void PostStop()
+        {
+            PassivateIdleTask?.Cancel();
+            base.PostStop();
+        }
 
         protected override bool ReceiveCommand(object message)
         {
-            return HandleCommand(message);
-        }
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="message">TBD</param>
-        /// <returns>TBD</returns>
-        protected override bool ReceiveRecover(object message)
-        {
-            SnapshotOffer offer;
-            if (message is EntityStarted)
+            switch (message)
             {
-                var started = (EntityStarted)message;
-                State = new ShardState(State.Entries.Add(started.EntityId));
+                case SaveSnapshotSuccess m:
+                    Log.Debug("PersistentShard snapshot saved successfully");
+                    InternalDeleteMessagesBeforeSnapshot(m, Settings.TunningParameters.KeepNrOfBatches, Settings.TunningParameters.SnapshotAfter);
+                    break;
+                case SaveSnapshotFailure m:
+                    Log.Warning("PersistentShard snapshot failure: [{0}]", m.Cause.Message);
+                    break;
+                case DeleteMessagesSuccess m:
+                    var deleteTo = m.ToSequenceNr - 1;
+                    var deleteFrom = Math.Max(0, deleteTo - Settings.TunningParameters.KeepNrOfBatches * Settings.TunningParameters.SnapshotAfter);
+                    Log.Debug("PersistentShard messages to [{0}] deleted successfully. Deleting snapshots from [{1}] to [{2}]", m.ToSequenceNr, deleteFrom, deleteTo);
+                    DeleteSnapshots(new SnapshotSelectionCriteria(deleteTo, DateTime.MaxValue, deleteFrom));
+                    break;
+                case DeleteMessagesFailure m:
+                    Log.Warning("PersistentShard messages to [{0}] deletion failure: [{1}]", m.ToSequenceNr, m.Cause.Message);
+                    break;
+                case DeleteSnapshotsSuccess m:
+                    Log.Debug("PersistentShard snapshots matching [{0}] deleted successfully", m.Criteria);
+                    break;
+                case DeleteSnapshotsFailure m:
+                    Log.Warning("PersistentShard snapshots matching [{0}] deletion failure: [{1}]", m.Criteria, m.Cause.Message);
+                    break;
+                default:
+                    return this.HandleCommand(message);
             }
-            else if (message is EntityStopped)
-            {
-                var stopped = (EntityStopped)message;
-                State = new ShardState(State.Entries.Remove(stopped.EntityId));
-            }
-            else if ((offer = message as SnapshotOffer) != null && offer.Snapshot is ShardState)
-            {
-                State = (ShardState)offer.Snapshot;
-            }
-            else if (message is RecoveryCompleted)
-            {
-                RestartRememberedEntities();
-                base.Initialized();
-                Log.Debug("PersistentShard recovery completed shard [{0}] with [{1}] entities", ShardId, State.Entries.Count);
-            }
-            else return false;
             return true;
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <typeparam name="T">TBD</typeparam>
-        /// <param name="evt">TBD</param>
-        /// <param name="handler">TBD</param>
-        protected override void ProcessChange<T>(T evt, Action<T> handler)
+        protected override bool ReceiveRecover(object message)
         {
-            SaveSnapshotIfNeeded();
-            Persist(evt, handler);
+            switch (message)
+            {
+                case Shard.EntityStarted started:
+                    State = new Shard.ShardState(State.Entries.Add(started.EntityId));
+                    return true;
+                case Shard.EntityStopped stopped:
+                    State = new Shard.ShardState(State.Entries.Remove(stopped.EntityId));
+                    return true;
+                case SnapshotOffer offer when offer.Snapshot is Shard.ShardState state:
+                    State = state;
+                    return true;
+                case RecoveryCompleted _:
+                    RestartRememberedEntities();
+                    this.Initialized();
+                    Log.Debug("PersistentShard recovery completed shard [{0}] with [{1}] entities", ShardId, State.Entries.Count);
+                    return true;
+            }
+            return false;
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        protected void SaveSnapshotIfNeeded()
+        private void RestartRememberedEntities()
         {
-            PersistCount++;
-            if ((PersistCount % Settings.TunningParameters.SnapshotAfter) == 0)
+            RememberedEntitiesRecoveryStrategy.RecoverEntities(State.Entries).ForEach(scheduledRecovery =>
+                scheduledRecovery.ContinueWith(t => new Shard.RestartEntities(t.Result), TaskContinuationOptions.ExecuteSynchronously).PipeTo(Self, Self));
+        }
+
+        public void SaveSnapshotWhenNeeded()
+        {
+            if (LastSequenceNr % Settings.TunningParameters.SnapshotAfter == 0 && LastSequenceNr != 0)
             {
                 Log.Debug("Saving snapshot, sequence number [{0}]", SnapshotSequenceNr);
                 SaveSnapshot(State);
             }
         }
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="tref">TBD</param>
-        protected override void EntityTerminated(IActorRef tref)
+        public void ProcessChange<T>(T evt, Action<T> handler) where T : Shard.StateChange
         {
-            ShardId id;
-            IImmutableList<Tuple<Msg, IActorRef>> buffer;
+            SaveSnapshotWhenNeeded();
+            Persist(evt, handler);
+        }
 
-            if (IdByRef.TryGetValue(tref, out id))
+        public void EntityTerminated(IActorRef tref)
+        {
+            if (!IdByRef.TryGetValue(tref, out var id)) return;
+            IdByRef = IdByRef.Remove(tref);
+            RefById = RefById.Remove(id);
+
+            if (PassivateIdleTask != null)
             {
-                if (MessageBuffers.TryGetValue(id, out buffer) && buffer.Count != 0)
+                LastMessageTimestamp = LastMessageTimestamp.Remove(id);
+            }
+
+            if (MessageBuffers.TryGetValue(id, out var buffer) && buffer.Count != 0)
+            {
+                //Note; because we're not persisting the EntityStopped, we don't need
+                // to persist the EntityStarted either.
+                Log.Debug("Starting entity [{0}] again, there are buffered messages for it", id);
+                this.SendMessageBuffer(new Shard.EntityStarted(id));
+            }
+            else
+            {
+                if (!Passivating.Contains(tref))
                 {
-                    // Note; because we're not persisting the EntityStopped, we don't need
-                    // to persist the EntityStarted either.
-                    Log.Debug("Starting entity [{0}] again, there are buffered messages for it", id);
-                    SendMessageBuffer(new EntityStarted(id));
+                    Log.Debug("Entity [{0}] stopped without passivating, will restart after backoff", id);
+                    Context.System.Scheduler.ScheduleTellOnce(Settings.TunningParameters.EntityRestartBackoff, Self, new Shard.RestartEntity(id), ActorRefs.NoSender);
                 }
                 else
-                {
-                    if (!Passivating.Contains(tref))
-                    {
-                        Log.Debug("Entity [{0}] stopped without passivating, will restart after backoff", id);
-                        Context.System.Scheduler.ScheduleTellOnce(Settings.TunningParameters.EntityRestartBackoff, Sender, new RestartEntity(id), Self);
-                    }
-                    else
-                    {
-                        ProcessChange(new EntityStopped(id), PassivateCompleted);
-                    }
-                }
+                    ProcessChange(new Shard.EntityStopped(id), this.PassivateCompleted);
             }
 
             Passivating = Passivating.Remove(tref);
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="id">TBD</param>
-        /// <param name="message">TBD</param>
-        /// <param name="payload">TBD</param>
-        /// <param name="sender">TBD</param>
-        /// <returns>TBD</returns>
-        protected override void DeliverTo(string id, object message, object payload, IActorRef sender)
+        public void DeliverTo(string id, object message, object payload, IActorRef sender)
         {
             var name = Uri.EscapeDataString(id);
             var child = Context.Child(name);
-            if (Equals(child, ActorRefs.Nobody))
+            if (child.IsNobody())
             {
-                // Note; we only do this if remembering, otherwise the buffer is an overhead
-                MessageBuffers = MessageBuffers.SetItem(id, ImmutableList<Tuple<object, IActorRef>>.Empty.Add(Tuple.Create(message, sender)));
-                SaveSnapshotIfNeeded();
-                Persist(new EntityStarted(id), SendMessageBuffer);
+                if (State.Entries.Contains(id))
+                {
+                    if (MessageBuffers.ContainsKey(id)) // this may happen when entity is stopped without passivation
+                    {
+                        throw new InvalidOperationException($"Message buffers contains id [{id}].");
+                    }
+                    this.GetOrCreateEntity(id).Tell(payload, sender);
+                }
+                else
+                {
+                    // Note; we only do this if remembering, otherwise the buffer is an overhead
+                    MessageBuffers = MessageBuffers.SetItem(id, ImmutableList<(object, IActorRef)>.Empty.Add((message, sender)));
+                    ProcessChange(new Shard.EntityStarted(id), this.SendMessageBuffer);
+                }
             }
             else
+            {
+                this.TouchLastMessageTimestamp(id);
                 child.Tell(payload, sender);
-        }
-        
-        private void RestartRememberedEntities()
-        {
-            RememberedEntitiesRecoveryStrategy.RecoverEntities(State.Entries).ForEach(scheduledRecovery =>
-                scheduledRecovery.ContinueWith(t => new RestartEntities(t.Result)).PipeTo(Self));
-        }
-
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="typeName">TBD</param>
-        /// <param name="shardId">TBD</param>
-        /// <param name="entryProps">TBD</param>
-        /// <param name="settings">TBD</param>
-        /// <param name="idExtractor">TBD</param>
-        /// <param name="shardResolver">TBD</param>
-        /// <param name="handOffStopMessage">TBD</param>
-        /// <returns>TBD</returns>
-        public static Actor.Props Props(string typeName, ShardId shardId, Props entryProps, ClusterShardingSettings settings, IdExtractor idExtractor, ShardResolver shardResolver, object handOffStopMessage)
-        {
-            return Actor.Props.Create(() => new PersistentShard(typeName, shardId, entryProps, settings, idExtractor, shardResolver, handOffStopMessage)).WithDeploy(Deploy.Local);
+            }
         }
     }
 }

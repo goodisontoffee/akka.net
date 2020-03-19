@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,17 +9,25 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.TestKit;
 using Akka.Util.Internal;
 using Xunit;
 using FluentAssertions;
+using Xunit.Abstractions;
 
 namespace Akka.Cluster.Tests
 {
     public class ClusterSpec : AkkaSpec
     {
+
+        /*
+         * Portability note: all of the _cluster.Join(selfAddress) calls are necessary here, whereas they are not in the JVM
+         * because the JVM test suite relies on side-effects from one test to another, whereas all of our tests are fully isolated.
+         */
+
         const string Config = @"    
             akka.cluster {
               auto-down-unreachable-after = 0s
@@ -39,14 +47,14 @@ namespace Akka.Cluster.Tests
 
         internal ClusterReadView ClusterView { get { return _cluster.ReadView; } }
 
-        public ClusterSpec()
-            : base(Config)
+        public ClusterSpec(ITestOutputHelper output)
+            : base(Config, output)
         {
             _selfAddress = Sys.AsInstanceOf<ExtendedActorSystem>().Provider.DefaultAddress;
             _cluster = Cluster.Get(Sys);
         }
 
-        public void LeaderActions()
+        internal void LeaderActions()
         {
             _cluster.ClusterCore.Tell(InternalClusterAction.LeaderActionsTick.Instance);
         }
@@ -89,7 +97,6 @@ namespace Akka.Cluster.Tests
         {
             try
             {
-                // TODO: this should be removed
                 _cluster.Join(_selfAddress);
                 LeaderActions(); // Joining -> Up
 
@@ -109,19 +116,24 @@ namespace Akka.Cluster.Tests
             ExpectMsg<ClusterEvent.CurrentClusterState>();
         }
 
-        // this should be the last test step, since the cluster is shutdown
         [Fact]
         public void A_cluster_must_publish_member_removed_when_shutdown()
         {
-            // TODO: this should be removed
-            _cluster.Join(_selfAddress);
-            LeaderActions(); // Joining -> Up
-
             var callbackProbe = CreateTestProbe();
             _cluster.RegisterOnMemberRemoved(() =>
             {
                 callbackProbe.Tell("OnMemberRemoved");
             });
+
+            _cluster.RegisterOnMemberUp(() =>
+            {
+                callbackProbe.Tell("OnMemberUp");
+            });
+
+            _cluster.Join(_selfAddress);
+            LeaderActions(); // Joining -> Up
+            callbackProbe.ExpectMsg("OnMemberUp"); // verify that callback hooks are registered
+
 
             _cluster.Subscribe(TestActor, new[] { typeof(ClusterEvent.MemberRemoved) });
             // first, is in response to the subscription
@@ -139,7 +151,6 @@ namespace Akka.Cluster.Tests
         [Fact]
         public void BugFix_2442_RegisterOnMemberUp_should_fire_if_node_already_up()
         {
-            // TODO: this should be removed
             _cluster.Join(_selfAddress);
             LeaderActions(); // Joining -> Up
 
@@ -177,12 +188,13 @@ namespace Akka.Cluster.Tests
 
             leaveTask.IsCompleted.Should().BeFalse();
             probe.ExpectMsg<ClusterEvent.MemberLeft>();
-            probe.ExpectMsg<ClusterEvent.MemberExited>();
-            probe.ExpectMsg<ClusterEvent.MemberRemoved>();
+            // MemberExited might not be published before MemberRemoved
+            var removed = (ClusterEvent.MemberRemoved)probe.FishForMessage(m => m is ClusterEvent.MemberRemoved);
+            removed.PreviousStatus.ShouldBeEquivalentTo(MemberStatus.Exiting);
 
             AwaitCondition(() => leaveTask.IsCompleted);
 
-            // A second call for LeaveAsync should complete immediately
+            // A second call for LeaveAsync should complete immediately (should be the same task as before)
             Cluster.Get(sys2).LeaveAsync().IsCompleted.Should().BeTrue();
         }
 
@@ -210,7 +222,7 @@ namespace Akka.Cluster.Tests
             });
 
             // LeaveAsync() task expected to complete immediately
-            _cluster.LeaveAsync().IsCompleted.Should().BeTrue();
+            AwaitCondition(() => _cluster.LeaveAsync().IsCompleted);
         }
 
         [Fact]
@@ -233,7 +245,7 @@ namespace Akka.Cluster.Tests
 
             // Cancelling the first task
             cts.Cancel();
-            task1.Should(t => t.IsCanceled, "Task should be cancelled.");
+            AwaitCondition(() => task1.IsCanceled, null, "Task should be cancelled");
 
             Within(TimeSpan.FromSeconds(10), () =>
             {
@@ -248,12 +260,12 @@ namespace Akka.Cluster.Tests
                 ExpectMsg<ClusterEvent.MemberRemoved>().Member.Address.Should().Be(_selfAddress);
 
                 // Second task should complete (not cancelled)
-                task2.Should(t => t.IsCompleted && !t.IsCanceled, "Task should be completed, but not cancelled.");
+                AwaitCondition(() => task2.IsCompleted && !task2.IsCanceled, null, "Task should be completed, but not cancelled.");
             });
 
             // Subsequent LeaveAsync() tasks expected to complete immediately (not cancelled)
             var task3 = _cluster.LeaveAsync();
-            task3.Should(t => t.IsCompleted && !t.IsCanceled, "Task should be completed, but not cancelled.");
+            AwaitCondition(() => task3.IsCompleted && !task3.IsCanceled, null, "Task should be completed, but not cancelled.");
         }
 
         [Fact]
@@ -292,6 +304,116 @@ namespace Akka.Cluster.Tests
         }
 
         [Fact]
+        public void A_cluster_must_be_able_to_JoinAsync()
+        {
+            var timeout = TimeSpan.FromSeconds(10);
+
+            try
+            {
+                _cluster.JoinAsync(_selfAddress).Wait(timeout).Should().BeTrue();
+                LeaderActions();
+                // Member should already be up
+                _cluster.Subscribe(TestActor, ClusterEvent.InitialStateAsEvents, new[] { typeof(ClusterEvent.IMemberEvent) });
+                ExpectMsg<ClusterEvent.MemberUp>();
+
+                // join second time - response should be immediate success
+                _cluster.JoinAsync(_selfAddress).Wait(TimeSpan.FromMilliseconds(100)).Should().BeTrue();
+            }
+            finally
+            {
+                _cluster.Shutdown();
+            }
+
+            // JoinAsync should fail after cluster has been shutdown - a manual actor system restart is required
+            Assert.ThrowsAsync<ClusterJoinFailedException>(async () =>
+            {
+                await _cluster.JoinAsync(_selfAddress);
+                LeaderActions();
+                ExpectMsg<ClusterEvent.MemberRemoved>();
+            }).Wait(timeout);
+        }
+
+        [Fact]
+        public void A_cluster_JoinAsync_must_fail_if_could_not_connect_to_cluster()
+        {
+            var timeout = TimeSpan.FromSeconds(10);
+
+            try
+            {
+                _cluster.Subscribe(TestActor, ClusterEvent.InitialStateAsEvents, new[] { typeof(ClusterEvent.IMemberEvent) });
+
+                var nonexisting = Address.Parse($"akka.tcp://{_selfAddress.System}@127.0.0.1:9999/");
+                Assert.ThrowsAsync<ClusterJoinFailedException>(async () =>
+                {
+                    await _cluster.JoinAsync(nonexisting);
+                    LeaderActions();
+
+                    ExpectMsg<ClusterEvent.MemberRemoved>();
+                }).Wait(timeout);
+
+            }
+            finally
+            {
+                _cluster.Shutdown();
+            }
+        }
+
+        [Fact]
+        public void A_cluster_must_be_able_to_join_async_to_seed_nodes()
+        {
+            var timeout = TimeSpan.FromSeconds(10);
+
+            try
+            {
+                _cluster.JoinSeedNodesAsync(new[] { _selfAddress }).Wait(timeout).Should().BeTrue();
+                LeaderActions();
+                // Member should already be up
+                _cluster.Subscribe(TestActor, ClusterEvent.InitialStateAsEvents, new[] { typeof(ClusterEvent.IMemberEvent) });
+                ExpectMsg<ClusterEvent.MemberUp>();
+
+                // join second time - response should be immediate success
+                _cluster.JoinSeedNodesAsync(new[] { _selfAddress }).Wait(TimeSpan.FromMilliseconds(100)).Should().BeTrue();
+            }
+            finally
+            {
+                _cluster.Shutdown();
+            }
+
+            // JoinSeedNodesAsync should fail after cluster has been shutdown - a manual actor system restart is required
+            Assert.ThrowsAsync<ClusterJoinFailedException>(async () =>
+            {
+                await _cluster.JoinSeedNodesAsync(new[] { _selfAddress });
+                LeaderActions();
+                ExpectMsg<ClusterEvent.MemberRemoved>();
+            }).Wait(timeout);
+        }
+
+        [Fact]
+        public void A_cluster_JoinSeedNodesAsync_must_fail_if_could_not_connect_to_cluster()
+        {
+            var timeout = TimeSpan.FromSeconds(10);
+
+            try
+            {
+                _cluster.Subscribe(TestActor, ClusterEvent.InitialStateAsEvents, new[] { typeof(ClusterEvent.IMemberEvent) });
+
+                var nonexisting = Address.Parse($"akka.tcp://{_selfAddress.System}@127.0.0.1:9999/");
+                Assert.ThrowsAsync<ClusterJoinFailedException>(async () =>
+                {
+                    await _cluster.JoinSeedNodesAsync(new[] { nonexisting });
+                    LeaderActions();
+
+                    ExpectMsg<ClusterEvent.MemberRemoved>();
+                }).Wait(timeout);
+
+            }
+            finally
+            {
+                _cluster.Shutdown();
+            }
+        }
+
+        [Fact]
         public void A_cluster_must_allow_to_resolve_RemotePathOf_any_actor()
         {
             var remotePath = _cluster.RemotePathOf(TestActor);
@@ -320,11 +442,45 @@ namespace Akka.Cluster.Tests
                 Cluster.Get(sys2).Join(Cluster.Get(sys2).SelfAddress);
                 probe.ExpectMsg<ClusterEvent.MemberUp>();
 
-                CoordinatedShutdown.Get(sys2).Run();
+                CoordinatedShutdown.Get(sys2).Run(CoordinatedShutdown.UnknownReason.Instance);
 
                 probe.ExpectMsg<ClusterEvent.MemberLeft>();
-                probe.ExpectMsg<ClusterEvent.MemberExited>();
-                probe.ExpectMsg<ClusterEvent.MemberRemoved>();
+                // MemberExited might not be published before MemberRemoved
+                var removed = (ClusterEvent.MemberRemoved)probe.FishForMessage(m => m is ClusterEvent.MemberRemoved);
+                removed.PreviousStatus.ShouldBeEquivalentTo(MemberStatus.Exiting);
+            }
+            finally
+            {
+                Shutdown(sys2);
+            }
+        }
+
+        [Fact]
+        public void A_cluster_must_leave_via_CoordinatedShutdownRun_when_member_status_is_Joining()
+        {
+            var sys2 = ActorSystem.Create("ClusterSpec2", ConfigurationFactory.ParseString(@"
+                akka.actor.provider = ""cluster""
+                akka.remote.dot-netty.tcp.port = 0
+                akka.coordinated-shutdown.run-by-clr-shutdown-hook = off
+                akka.coordinated-shutdown.terminate-actor-system = off
+                akka.cluster.run-coordinated-shutdown-when-down = off
+                akka.cluster.min-nr-of-members = 2
+            ").WithFallback(Akka.TestKit.Configs.TestConfigs.DefaultConfig));
+
+            try
+            {
+                var probe = CreateTestProbe(sys2);
+                Cluster.Get(sys2).Subscribe(probe.Ref, typeof(ClusterEvent.IMemberEvent));
+                probe.ExpectMsg<ClusterEvent.CurrentClusterState>();
+                Cluster.Get(sys2).Join(Cluster.Get(sys2).SelfAddress);
+                probe.ExpectMsg<ClusterEvent.MemberJoined>();
+
+                CoordinatedShutdown.Get(sys2).Run(CoordinatedShutdown.UnknownReason.Instance);
+
+                probe.ExpectMsg<ClusterEvent.MemberLeft>();
+                // MemberExited might not be published before MemberRemoved
+                var removed = (ClusterEvent.MemberRemoved)probe.FishForMessage(m => m is ClusterEvent.MemberRemoved);
+                removed.PreviousStatus.ShouldBeEquivalentTo(MemberStatus.Exiting);
             }
             finally
             {
@@ -352,10 +508,12 @@ namespace Akka.Cluster.Tests
                 Cluster.Get(sys2).Leave(Cluster.Get(sys2).SelfAddress);
 
                 probe.ExpectMsg<ClusterEvent.MemberLeft>();
-                probe.ExpectMsg<ClusterEvent.MemberExited>();
-                probe.ExpectMsg<ClusterEvent.MemberRemoved>(); 
+                // MemberExited might not be published before MemberRemoved
+                var removed = (ClusterEvent.MemberRemoved)probe.FishForMessage(m => m is ClusterEvent.MemberRemoved);
+                removed.PreviousStatus.ShouldBeEquivalentTo(MemberStatus.Exiting);
                 AwaitCondition(() => sys2.WhenTerminated.IsCompleted, TimeSpan.FromSeconds(10));
                 Cluster.Get(sys2).IsTerminated.Should().BeTrue();
+                CoordinatedShutdown.Get(sys2).ShutdownReason.Should().BeOfType<CoordinatedShutdown.ClusterLeavingReason>();
             }
             finally
             {
@@ -384,9 +542,11 @@ namespace Akka.Cluster.Tests
 
                 Cluster.Get(sys3).Down(Cluster.Get(sys3).SelfAddress);
 
+                probe.ExpectMsg<ClusterEvent.MemberDowned>();
                 probe.ExpectMsg<ClusterEvent.MemberRemoved>();
                 AwaitCondition(() => sys3.WhenTerminated.IsCompleted, TimeSpan.FromSeconds(10));
                 Cluster.Get(sys3).IsTerminated.Should().BeTrue();
+                CoordinatedShutdown.Get(sys3).ShutdownReason.Should().BeOfType<CoordinatedShutdown.ClusterDowningReason>();
             }
             finally
             {

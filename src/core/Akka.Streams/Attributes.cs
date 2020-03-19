@@ -1,7 +1,7 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="Attributes.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -355,7 +355,7 @@ namespace Akka.Streams
         /// Logging a certain operation can be completely disabled by using <see cref="LogLevels.Off"/>
         ///
         /// Passing in null as any of the arguments sets the level to its default value, which is:
-        /// <see cref="LogLevel.DebugLevel"/> for <paramref name="onElement"/> and <paramref name="onFinish"/>, and <see cref="LogLevel.ErrorLevel"/> for <paramref name="onError"/>.
+        /// <see cref="Akka.Event.LogLevel.DebugLevel"/> for <paramref name="onElement"/> and <paramref name="onFinish"/>, and <see cref="Akka.Event.LogLevel.ErrorLevel"/> for <paramref name="onError"/>.
         ///</summary>
         /// <param name="onElement">TBD</param>
         /// <param name="onFinish">TBD</param>
@@ -440,7 +440,7 @@ namespace Akka.Streams
             public readonly Decider Decider;
 
             /// <summary>
-            /// TBD
+            /// Initializes a new instance of the <see cref="SupervisionStrategy"/> class.
             /// </summary>
             /// <param name="decider">TBD</param>
             public SupervisionStrategy(Decider decider)
@@ -460,12 +460,42 @@ namespace Akka.Streams
         public static Attributes CreateDispatcher(string dispatcherName) => new Attributes(new Dispatcher(dispatcherName));
 
         /// <summary>
-        /// Specifies the SupervisionStrategy.
         /// Decides how exceptions from user are to be handled
+        /// <para>
+        /// Stages supporting supervision strategies explicitly document that they do so. If a stage does not document
+        /// support for these, it should be assumed it does not support supervision.
+        /// </para>
         /// </summary>
         /// <param name="strategy">TBD</param>
         /// <returns>TBD</returns>
         public static Attributes CreateSupervisionStrategy(Decider strategy)
             => new Attributes(new SupervisionStrategy(strategy));
+    }
+    
+    /// <summary>
+    /// Attributes for stream refs (<see cref="ISourceRef{TOut}"/> and <see cref="ISinkRef{TIn}"/>).
+    /// Note that more attributes defined in <see cref="Attributes"/> and <see cref="ActorAttributes"/>.
+    /// </summary>
+    public static class StreamRefAttributes
+    {
+        /// <summary>
+        /// Attributes specific to stream refs.
+        /// </summary>
+        public interface IStreamRefAttribute : Attributes.IAttribute { }
+
+        public sealed class SubscriptionTimeout : IStreamRefAttribute
+        {
+            public TimeSpan Timeout { get; }
+
+            public SubscriptionTimeout(TimeSpan timeout)
+            {
+                Timeout = timeout;
+            }
+        }
+        
+        /// <summary>
+        /// Specifies the subscription timeout within which the remote side MUST subscribe to the handed out stream reference.
+        /// </summary>
+        public static Attributes CreateSubscriptionTimeout(TimeSpan timeout) => new Attributes(new SubscriptionTimeout(timeout));
     }
 }

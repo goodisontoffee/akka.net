@@ -1,13 +1,14 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CachingConfig.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2018 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2018 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using Akka.Annotations;
 using Akka.Configuration;
 using Akka.Configuration.Hocon;
 
@@ -22,6 +23,7 @@ namespace Akka.Dispatch
     /// 
     /// All other <see cref="Config"/> operations are delegated to the wrapped <see cref="Config"/>.
     /// </summary>
+    [InternalApi]
     class CachingConfig : Config
     {
         private static readonly Config EmptyConfig = ConfigurationFactory.Empty;
@@ -146,8 +148,7 @@ namespace Akka.Dispatch
 
         private IPathEntry GetPathEntry(string path)
         {
-            IPathEntry pathEntry;
-            if (!_entryMap.TryGetValue(path, out pathEntry)) //cache miss
+            if (!_entryMap.TryGetValue(path, out var pathEntry)) //cache miss
             {
                 try
                 {
@@ -157,17 +158,11 @@ namespace Akka.Dispatch
                         {
                             var configValue = _config.GetValue(path);
                             if (configValue == null) //empty
-                            {
                                 pathEntry = EmptyPathEntry;
-                            }
                             else if (configValue.IsString()) //is a string value
-                            {
                                 pathEntry = new StringPathEntry(true, true, configValue.AtKey("cached"), configValue.GetString());
-                            }
                             else //some other type of HOCON value
-                            {
                                 pathEntry = new ValuePathEntry(true, true, configValue.AtKey("cached"));
-                            }
                         }
                         catch (Exception)
                         {
@@ -175,9 +170,7 @@ namespace Akka.Dispatch
                         }
                     }
                     else //couldn't find the path
-                    {
                         pathEntry = NonExistingPathEntry;
-                    }
                 }
                 catch (Exception) //configuration threw some sort of error
                 {
@@ -185,15 +178,10 @@ namespace Akka.Dispatch
                 }
 
                 if (_entryMap.TryAdd(path, pathEntry))
-                {
                     return pathEntry;
-                }
-                else
-                {
-                    return _entryMap[path];
-                }
+                return _entryMap[path];
             }
-            
+
             //cache hit
             return pathEntry;
         }
@@ -300,7 +288,7 @@ namespace Akka.Dispatch
             var pathEntry = GetPathEntry(path);
             if (pathEntry is StringPathEntry)
             {
-                return ((StringPathEntry) pathEntry).Value;
+                return ((StringPathEntry)pathEntry).Value;
             }
             else
             {
@@ -414,8 +402,9 @@ namespace Akka.Dispatch
         /// TBD
         /// </summary>
         /// <param name="path">TBD</param>
+        /// <param name="strings"></param>
         /// <returns>TBD</returns>
-        public override IList<string> GetStringList(string path)
+        public override IList<string> GetStringList(string path, string[] strings)
         {
             return _config.GetStringList(path);
         }
@@ -443,4 +432,3 @@ namespace Akka.Dispatch
         }
     }
 }
-

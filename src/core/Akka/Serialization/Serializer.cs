@@ -1,14 +1,18 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Serializer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.Serialization;
 using Akka.Actor;
+using Akka.Annotations;
 using Akka.Util;
+using Akka.Configuration;
 
 namespace Akka.Serialization
 {
@@ -38,23 +42,23 @@ namespace Akka.Serialization
         /// </summary>
         protected readonly ExtendedActorSystem system;
 
+        private readonly FastLazy<int> _value;
+
         /// <summary>
-        ///     Initializes a new instance of the <see cref="Serializer" /> class.
+        /// Initializes a new instance of the <see cref="Serializer" /> class.
         /// </summary>
         /// <param name="system">The actor system to associate with this serializer. </param>
-        public Serializer(ExtendedActorSystem system)
+        protected Serializer(ExtendedActorSystem system)
         {
             this.system = system;
+            _value = new FastLazy<int>(() => SerializerIdentifierHelper.GetSerializerIdentifierFromConfig(GetType(), system));
         }
 
         /// <summary>
         /// Completely unique value to identify this implementation of Serializer, used to optimize network traffic
         /// Values from 0 to 16 is reserved for Akka internal usage
         /// </summary>
-        public virtual int Identifier
-        {
-            get { return SerializerIdentifierHelper.GetSerializerIdentifierFromConfig(GetType(), system); }
-        }
+        public virtual int Identifier => _value.Value;
 
         /// <summary>
         /// Returns whether this serializer needs a manifest in the fromBinary method
@@ -76,7 +80,7 @@ namespace Akka.Serialization
         /// <returns>TBD</returns>
         public byte[] ToBinaryWithAddress(Address address, object obj)
         {
-            return Serialization.SerializeWithTransport(system, address, () => ToBinary(obj));
+            return Serialization.WithTransport(system, address, () => ToBinary(obj));
         }
 
         /// <summary>
@@ -111,10 +115,19 @@ namespace Akka.Serialization
         /// <summary>
         /// Returns whether this serializer needs a manifest in the fromBinary method
         /// </summary>
-        public sealed override bool IncludeManifest { get { return true; } }
+        public sealed override bool IncludeManifest => true;
 
         /// <summary>
         /// Deserializes a byte array into an object of type <paramref name="type" />.
+        ///
+        /// It's recommended to throw <see cref="SerializationException"/> in <see cref="FromBinary(byte[], Type)"/>
+        /// if the manifest is unknown.This makes it possible to introduce new message
+        /// types and send them to nodes that don't know about them. This is typically
+        /// needed when performing rolling upgrades, i.e.running a cluster with mixed
+        /// versions for while. <see cref="SerializationException"/> is treated as a transient
+        /// problem in the TCP based remoting layer.The problem will be logged
+        /// and message is dropped.Other exceptions will tear down the TCP connection
+        /// because it can be an indication of corrupt bytes from the underlying transport.
         /// </summary>
         /// <param name="bytes">The array containing the serialized object</param>
         /// <param name="type">The type of object contained in the array</param>
@@ -127,6 +140,15 @@ namespace Akka.Serialization
 
         /// <summary>
         /// Deserializes a byte array into an object using an optional <paramref name="manifest"/> (type hint).
+        ///
+        /// It's recommended to throw <see cref="SerializationException"/> in <see cref="FromBinary(byte[], string)"/>
+        /// if the manifest is unknown.This makes it possible to introduce new message
+        /// types and send them to nodes that don't know about them. This is typically
+        /// needed when performing rolling upgrades, i.e.running a cluster with mixed
+        /// versions for while. <see cref="SerializationException"/> is treated as a transient
+        /// problem in the TCP based remoting layer.The problem will be logged
+        /// and message is dropped.Other exceptions will tear down the TCP connection
+        /// because it can be an indication of corrupt bytes from the underlying transport.
         /// </summary>
         /// <param name="bytes">The array containing the serialized object</param>
         /// <param name="manifest">The type hint used to deserialize the object contained in the array.</param>
@@ -135,7 +157,7 @@ namespace Akka.Serialization
 
         /// <summary>
         /// Returns the manifest (type hint) that will be provided in the <see cref="FromBinary(byte[],System.Type)"/> method.
-        /// 
+        ///
         /// <note>
         /// This method returns <see cref="String.Empty"/> if a manifest is not needed.
         /// </note>
@@ -148,12 +170,10 @@ namespace Akka.Serialization
     /// <summary>
     /// INTERNAL API.
     /// </summary>
+    [InternalApi]
     public static class SerializerIdentifierHelper
     {
-        /// <summary>
-        /// TBD
-        /// </summary>
-        public const string SerializationIdentifiers = "akka.actor.serialization-identifiers";
+        internal const string SerializationIdentifiers = "akka.actor.serialization-identifiers";
 
         /// <summary>
         /// TBD
@@ -167,18 +187,17 @@ namespace Akka.Serialization
         public static int GetSerializerIdentifierFromConfig(Type type, ExtendedActorSystem system)
         {
             var config = system.Settings.Config.GetConfig(SerializationIdentifiers);
+            /*
+            if (config.IsNullOrEmpty())
+                throw new ConfigurationException($"Cannot retrieve serialization identifier informations: {SerializationIdentifiers} configuration node not found");
+            */
             var identifiers = config.AsEnumerable()
                 .ToDictionary(pair => Type.GetType(pair.Key, true), pair => pair.Value.GetInt());
 
-            int value;
-            if (identifiers.TryGetValue(type, out value))
-            {
-                return value;
-            }
-            else
-            {
+            if (!identifiers.TryGetValue(type, out int value))
                 throw new ArgumentException($"Couldn't find serializer id for [{type}] under [{SerializationIdentifiers}] HOCON path", nameof(type));
-            }
+
+            return value;
         }
     }
 }

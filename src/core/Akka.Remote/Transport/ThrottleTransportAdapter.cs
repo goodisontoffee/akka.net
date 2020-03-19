@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ThrottleTransportAdapter.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -11,9 +11,10 @@ using System.Linq;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Dispatch.SysMsg;
+using Akka.Remote.Serialization;
 using Akka.Util;
 using Akka.Util.Internal;
-using Google.ProtocolBuffers;
+using Google.Protobuf;
 
 namespace Akka.Remote.Transport
 {
@@ -337,10 +338,10 @@ namespace Akka.Remote.Transport
         /// TBD
         /// </summary>
         protected readonly Transport WrappedTransport;
-        private Dictionary<Address, Tuple<ThrottleMode, ThrottleTransportAdapter.Direction>> _throttlingModes
-            = new Dictionary<Address, Tuple<ThrottleMode, ThrottleTransportAdapter.Direction>>();
+        private Dictionary<Address, (ThrottleMode, ThrottleTransportAdapter.Direction)> _throttlingModes
+            = new Dictionary<Address, (ThrottleMode, ThrottleTransportAdapter.Direction)>();
 
-        private List<Tuple<Address, ThrottlerHandle>> _handleTable = new List<Tuple<Address, ThrottlerHandle>>();
+        private List<(Address, ThrottlerHandle)> _handleTable = new List<(Address, ThrottlerHandle)>();
 
         /// <summary>
         /// TBD
@@ -393,14 +394,14 @@ namespace Akka.Remote.Transport
                 wrappedHandle.OutboundThrottleMode.Value = GetOutboundMode(naked);
                 wrappedHandle.ReadHandlerSource.Task.ContinueWith(tr => new ListenerAndMode(tr.Result, inMode), TaskContinuationOptions.ExecuteSynchronously)
                     .PipeTo(wrappedHandle.ThrottlerActor);
-                _handleTable.Add(Tuple.Create(naked, wrappedHandle));
+                _handleTable.Add((naked, wrappedHandle));
                 ar.StatusPromise.SetResult(wrappedHandle);
             }
             else if (message is SetThrottle)
             {
                 var st = message as SetThrottle;
                 var naked = NakedAddress(st.Address);
-                _throttlingModes[naked] = new Tuple<ThrottleMode, ThrottleTransportAdapter.Direction>(st.Mode, st.Direction);
+                _throttlingModes[naked] = (st.Mode, st.Direction);
                 var ok = Task.FromResult(SetThrottleAck.Instance);
                 var modes = new List<Task<SetThrottleAck>>() { ok };
                 foreach (var handle in _handleTable)
@@ -478,7 +479,7 @@ namespace Akka.Remote.Transport
             {
                 var chkin = message as Checkin;
                 var naked = NakedAddress(chkin.Origin);
-                _handleTable.Add(new Tuple<Address, ThrottlerHandle>(naked, chkin.ThrottlerHandle));
+                _handleTable.Add((naked, chkin.ThrottlerHandle));
                 SetMode(naked, chkin.ThrottlerHandle);
             }
         }
@@ -493,36 +494,27 @@ namespace Akka.Remote.Transport
 
         private ThrottleMode GetInboundMode(Address nakedAddress)
         {
-            Tuple<ThrottleMode, ThrottleTransportAdapter.Direction> mode;
-            if (_throttlingModes.TryGetValue(nakedAddress, out mode))
-            {
-                if (mode.Item2 == ThrottleTransportAdapter.Direction.Both ||
-                    mode.Item2 == ThrottleTransportAdapter.Direction.Receive)
+            if (_throttlingModes.TryGetValue(nakedAddress, out var mode))
+                if (mode.Item2 == ThrottleTransportAdapter.Direction.Both || mode.Item2 == ThrottleTransportAdapter.Direction.Receive)
                     return mode.Item1;
-            }
 
             return Unthrottled.Instance;
         }
 
         private ThrottleMode GetOutboundMode(Address nakedAddress)
         {
-            Tuple<ThrottleMode, ThrottleTransportAdapter.Direction> mode;
-            if (_throttlingModes.TryGetValue(nakedAddress, out mode))
-            {
-                if (mode.Item2 == ThrottleTransportAdapter.Direction.Both ||
-                    mode.Item2 == ThrottleTransportAdapter.Direction.Send)
+            if (_throttlingModes.TryGetValue(nakedAddress, out var mode))
+                if (mode.Item2 == ThrottleTransportAdapter.Direction.Both || mode.Item2 == ThrottleTransportAdapter.Direction.Send)
                     return mode.Item1;
-            }
+
             return Unthrottled.Instance;
         }
 
         private Task<SetThrottleAck> SetMode(Address nakedAddress, ThrottlerHandle handle)
         {
-            Tuple<ThrottleMode, ThrottleTransportAdapter.Direction> mode;
-            if (_throttlingModes.TryGetValue(nakedAddress, out mode))
-            {
+            if (_throttlingModes.TryGetValue(nakedAddress, out var mode))
                 return SetMode(handle, mode.Item1, mode.Item2);
-            }
+
             return SetMode(handle, Unthrottled.Instance, ThrottleTransportAdapter.Direction.Both);
         }
 
@@ -583,7 +575,7 @@ namespace Akka.Remote.Transport
         /// <param name="nanoTimeOfSend">TBD</param>
         /// <param name="tokens">TBD</param>
         /// <returns>TBD</returns>
-        public abstract Tuple<ThrottleMode, bool> TryConsumeTokens(long nanoTimeOfSend, int tokens);
+        public abstract (ThrottleMode, bool) TryConsumeTokens(long nanoTimeOfSend, int tokens);
         /// <summary>
         /// TBD
         /// </summary>
@@ -614,9 +606,9 @@ namespace Akka.Remote.Transport
         }
 
         /// <inheritdoc/>
-        public override Tuple<ThrottleMode, bool> TryConsumeTokens(long nanoTimeOfSend, int tokens)
+        public override (ThrottleMode, bool) TryConsumeTokens(long nanoTimeOfSend, int tokens)
         {
-            return Tuple.Create<ThrottleMode, bool>(this, false);
+            return (this, false);
         }
 
         /// <inheritdoc/>
@@ -646,9 +638,9 @@ namespace Akka.Remote.Transport
         }
 
         /// <inheritdoc/>
-        public override Tuple<ThrottleMode, bool> TryConsumeTokens(long nanoTimeOfSend, int tokens)
+        public override (ThrottleMode, bool) TryConsumeTokens(long nanoTimeOfSend, int tokens)
         {
-            return Tuple.Create<ThrottleMode, bool>(this, true);
+            return (this, true);
         }
 
         /// <inheritdoc/>
@@ -691,16 +683,16 @@ namespace Akka.Remote.Transport
         }
 
         /// <inheritdoc/>
-        public override Tuple<ThrottleMode, bool> TryConsumeTokens(long nanoTimeOfSend, int tokens)
+        public override (ThrottleMode, bool) TryConsumeTokens(long nanoTimeOfSend, int tokens)
         {
             if (IsAvailable(nanoTimeOfSend, tokens))
             {
-                return Tuple.Create<ThrottleMode, bool>(Copy(
-                    nanoTimeOfLastSend: nanoTimeOfSend,
-                    availableTokens: Math.Min(_availableTokens - tokens + TokensGenerated(nanoTimeOfSend), _capacity))
+                return (Copy(
+                        nanoTimeOfLastSend: nanoTimeOfSend,
+                        availableTokens: Math.Min(_availableTokens - tokens + TokensGenerated(nanoTimeOfSend), _capacity))
                     , true);
             }
-            return Tuple.Create<ThrottleMode, bool>(this, false);
+            return (this, false);
         }
 
         /// <inheritdoc/>
@@ -781,7 +773,7 @@ namespace Akka.Remote.Transport
     /// <summary>
     /// Applies a throttle to the underlying conneciton
     /// </summary>
-    internal sealed class SetThrottle
+    public sealed class SetThrottle
     {
         readonly Address _address;
         /// <summary>
@@ -864,7 +856,7 @@ namespace Akka.Remote.Transport
     /// <summary>
     /// ACKs a throttle command
     /// </summary>
-    internal sealed class SetThrottleAck
+    public sealed class SetThrottleAck
     {
         private SetThrottleAck() { }
         // ReSharper disable once InconsistentNaming
@@ -904,8 +896,7 @@ namespace Akka.Remote.Transport
             var tokens = payload.Length;
             //need to declare recursive delegates first before they can self-reference
             //might want to consider making this consumer function strongly typed: http://blogs.msdn.com/b/wesdyer/archive/2007/02/02/anonymous-recursion-in-c.aspx
-            Func<ThrottleMode, bool> tryConsume = null;
-            tryConsume = currentBucket =>
+            bool TryConsume(ThrottleMode currentBucket)
             {
                 var timeOfSend = MonotonicClock.GetNanos();
                 var res = currentBucket.TryConsumeTokens(timeOfSend, tokens);
@@ -913,15 +904,15 @@ namespace Akka.Remote.Transport
                 var allow = res.Item2;
                 if (allow)
                 {
-                    return OutboundThrottleMode.CompareAndSet(currentBucket, newBucket) || tryConsume(OutboundThrottleMode.Value);
+                    return OutboundThrottleMode.CompareAndSet(currentBucket, newBucket) || TryConsume(OutboundThrottleMode.Value);
                 }
                 return false;
-            };
+            }
 
             var throttleMode = OutboundThrottleMode.Value;
             if (throttleMode is Blackhole) return true;
 
-            var success = tryConsume(OutboundThrottleMode.Value);
+            var success = TryConsume(OutboundThrottleMode.Value);
             return success && WrappedHandle.Write(payload);
         }
 
@@ -1089,7 +1080,7 @@ namespace Akka.Remote.Transport
         /// <summary>
         /// Used for decoding certain types of throttled messages on-the-fly
         /// </summary>
-        private static readonly AkkaPduProtobuffCodec Codec = new AkkaPduProtobuffCodec();
+        private readonly AkkaPduProtobuffCodec _codec;
 
         /// <summary>
         /// TBD
@@ -1100,6 +1091,7 @@ namespace Akka.Remote.Transport
         /// <param name="inbound">TBD</param>
         public ThrottledAssociation(IActorRef manager, IAssociationEventListener associationHandler, AssociationHandle originalHandle, bool inbound)
         {
+            _codec = new AkkaPduProtobuffCodec(Context.System);
             Manager = manager;
             AssociationHandler = associationHandler;
             OriginalHandle = originalHandle;
@@ -1303,7 +1295,7 @@ namespace Akka.Remote.Transport
         {
             try
             {
-                var pdu = Codec.DecodePdu(b);
+                var pdu = _codec.DecodePdu(b);
                 if (pdu is Associate)
                 {
                     return pdu.AsInstanceOf<Associate>().Info.Origin;

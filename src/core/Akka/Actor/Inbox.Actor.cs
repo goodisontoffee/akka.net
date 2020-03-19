@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Inbox.Actor.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -25,10 +25,12 @@ namespace Akka.Actor
 
         private object _currentMessage;
         private Select? _currentSelect;
-        private Tuple<TimeSpan, ICancelable> _currentDeadline;
+        private (TimeSpan, ICancelable)? _currentDeadline;
 
-        private int _size;
-        private ILoggingAdapter _log = Context.GetLogger();
+        private readonly int _size;
+        private readonly ILoggingAdapter _log = Context.GetLogger();
+
+        private readonly IQuery[] _matched = new IQuery[1];
 
         /// <summary>
         /// TBD
@@ -42,23 +44,23 @@ namespace Akka.Actor
         /// <summary>
         /// TBD
         /// </summary>
-        /// <param name="q">TBD</param>
-        public void EnqueueQuery(IQuery q)
+        /// <param name="query">TBD</param>
+        private void EnqueueQuery(IQuery query)
         {
-            var query = q.WithClient(Sender);
-            _clients.Enqueue(query);
-            _clientsByTimeout.Add(query);
+            var q = query.WithClient(Sender);
+            _clients.Enqueue(q);
+            _clientsByTimeout.Add(q);
         }
 
         /// <summary>
         /// TBD
         /// </summary>
-        /// <param name="msg">TBD</param>
-        public void EnqueueMessage(object msg)
+        /// <param name="message">TBD</param>
+        private void EnqueueMessage(object message)
         {
             if (_messages.Count < _size)
             {
-                _messages.Enqueue(msg);
+                _messages.Enqueue(message);
             }
             else
             {
@@ -75,35 +77,25 @@ namespace Akka.Actor
         /// </summary>
         /// <param name="query">TBD</param>
         /// <returns>TBD</returns>
-        public bool ClientPredicate(IQuery query)
+        private bool ClientPredicate(IQuery query)
         {
-            if (query is Get)
-            {
-                return true;
-            }
-            else if (query is Select)
-            {
-                return ((Select)query).Predicate(_currentMessage);
-            }
-            else
-            {
-                return false;
-            }
+            if (query is Select select)
+                return select.Predicate(_currentMessage);
+
+            return query is Get;
         }
 
         /// <summary>
         /// TBD
         /// </summary>
-        /// <param name="msg">TBD</param>
+        /// <param name="message">TBD</param>
         /// <returns>TBD</returns>
-        public bool MessagePredicate(object msg)
+        private bool MessagePredicate(object message)
         {
-            if (!_currentSelect.HasValue)
-            {
-                return false;
-            }
+            if (_currentSelect.HasValue)
+                return _currentSelect.Value.Predicate(message);
 
-            return _currentSelect.Value.Predicate(msg);
+            return false;
         }
 
         /// <summary>
@@ -113,80 +105,91 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         protected override bool Receive(object message)
         {
-            message.Match()
-                .With<Get>(get =>
+            if (message is Get get)
+            {
+                if (_messages.Count == 0)
                 {
-                    if (_messages.Count == 0)
-                    {
-                        EnqueueQuery(get);
-                    }
-                    else
-                    {
-                        Sender.Tell(_messages.Dequeue());
-                    }
-                })
-                .With<Select>(select =>
+                    EnqueueQuery(get);
+                }
+                else
                 {
-                    if (_messages.Count == 0)
+                    Sender.Tell(_messages.Dequeue());
+                }
+            }
+            else if (message is Select select)
+            {
+                if (_messages.Count == 0)
+                {
+                    EnqueueQuery(select);
+                }
+                else
+                {
+                    _currentSelect = select;
+                    var firstMatch = _messages.DequeueFirstOrDefault(MessagePredicate);
+                    if (firstMatch == null)
                     {
                         EnqueueQuery(select);
                     }
                     else
                     {
-                        _currentSelect = select;
-                        var firstMatch = _messages.DequeueFirstOrDefault(MessagePredicate);
-                        if (firstMatch == null)
-                        {
-                            EnqueueQuery(select);
-                        }
-                        else
-                        {
-                            Sender.Tell(firstMatch);
-                        }
-                        _currentSelect = null;
+                        Sender.Tell(firstMatch);
                     }
-                })
-                .With<StartWatch>(sw => Context.Watch(sw.Target))
-                .With<StopWatch>(sw => Context.Unwatch(sw.Target))
-                .With<Kick>(() =>
+                    _currentSelect = null;
+                }
+            }
+            else if (message is StartWatch startwatch)
+            {
+                if (startwatch.Message == null)
+                    Context.Watch(startwatch.Target);
+                else
+                    Context.WatchWith(startwatch.Target, startwatch.Message);
+            }
+            else if (message is StopWatch stopwatch)
+            {
+                Context.Unwatch(stopwatch.Target);
+            }
+            else if (message is Kick)
+            {
+                var now = Context.System.Scheduler.MonotonicClock;
+                var overdue = _clientsByTimeout.TakeWhile(q => q.Deadline < now);
+
+                foreach (var query in overdue)
                 {
-                    var now = Context.System.Scheduler.MonotonicClock;
-                    var overdue = _clientsByTimeout.TakeWhile(q => q.Deadline < now);
-                    foreach (var query in overdue)
-                    {
-                        query.Client.Tell(new Status.Failure(new TimeoutException("Deadline passed")));
-                    }
-                    _clients.RemoveAll(q => q.Deadline < now);
-                    var afterDeadline = _clientsByTimeout.Where(q => q.Deadline >= now).ToList();
-                    _clientsByTimeout.IntersectWith(afterDeadline);
-                }).Default(msg =>
+                    query.Client.Tell(new Status.Failure(new TimeoutException("Deadline passed")));
+                }
+                _clients.RemoveAll(q => q.Deadline < now);
+
+                var afterDeadline = _clientsByTimeout.Where(q => q.Deadline >= now);
+                _clientsByTimeout.IntersectWith(afterDeadline);
+            }
+            else
+            {
+                if (_clients.Count == 0)
                 {
-                    if (_clients.Count == 0)
+                    EnqueueMessage(message);
+                }
+                else
+                {
+                    _currentMessage = message;
+                    var firstMatch = _matched[0] = _clients.DequeueFirstOrDefault(ClientPredicate); //TODO: this should work as DequeueFirstOrDefault
+                    if (firstMatch != null)
                     {
-                        EnqueueMessage(msg);
+                        _clientsByTimeout.ExceptWith(_matched);
+                        firstMatch.Client.Tell(message);
                     }
                     else
                     {
-                        _currentMessage = msg;
-                        var firstMatch = _clients.DequeueFirstOrDefault(ClientPredicate); //TODO: this should work as DequeueFirstOrDefault
-                        if (firstMatch != null)
-                        {
-                            _clientsByTimeout.ExceptWith(new[] { firstMatch });
-                            firstMatch.Client.Tell(msg);
-                        }
-                        else
-                        {
-                            EnqueueMessage(msg);
-                        }
-                        _currentMessage = null;
+                        EnqueueMessage(message);
                     }
-                });
+                    _currentMessage = null;
+                }
+            }
 
             if (_clients.Count == 0)
             {
                 if (_currentDeadline != null)
                 {
-                    _currentDeadline.Item2.Cancel();
+                    _currentDeadline.Value.Item2.Cancel();
                     _currentDeadline = null;
                 }
             }
@@ -197,16 +200,16 @@ namespace Akka.Actor
                 {
                     if (_currentDeadline != null)
                     {
-                        _currentDeadline.Item2.Cancel();
+                        _currentDeadline.Value.Item2.Cancel();
                         _currentDeadline = null;
                     }
 
-                    TimeSpan delay = next.Deadline - Context.System.Scheduler.MonotonicClock;
+                    var delay = next.Deadline - Context.System.Scheduler.MonotonicClock;
 
                     if (delay > TimeSpan.Zero)
                     {
                         var cancelable = Context.System.Scheduler.ScheduleTellOnceCancelable(delay, Self, new Kick(), Self);
-                        _currentDeadline = Tuple.Create(next.Deadline, cancelable);
+                        _currentDeadline = (next.Deadline, cancelable);
                     }
                     else
                     {
@@ -219,5 +222,4 @@ namespace Akka.Actor
             return true;
         }
     }
-
 }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="HashedWheelTimerScheduler.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -45,8 +45,11 @@ namespace Akka.Actor
         /// <exception cref="ArgumentOutOfRangeException">TBD</exception>
         public HashedWheelTimerScheduler(Config scheduler, ILoggingAdapter log) : base(scheduler, log)
         {
-            var ticksPerWheel = SchedulerConfig.GetInt("akka.scheduler.ticks-per-wheel");
-            var tickDuration = SchedulerConfig.GetTimeSpan("akka.scheduler.tick-duration");
+            if (SchedulerConfig.IsNullOrEmpty())
+                throw ConfigurationException.NullOrEmptyConfig<HashedWheelTimerScheduler>();
+
+            var ticksPerWheel = SchedulerConfig.GetInt("akka.scheduler.ticks-per-wheel", 0);
+            var tickDuration = SchedulerConfig.GetTimeSpan("akka.scheduler.tick-duration", null);
             if (tickDuration.TotalMilliseconds < 10.0d)
                 throw new ArgumentOutOfRangeException("minimum supported akka.scheduler.tick-duration on Windows is 10ms");
 
@@ -62,7 +65,7 @@ namespace Akka.Actor
                 throw new ArgumentOutOfRangeException("akka.scheduler.tick-duration", _tickDuration,
                     $"akka.scheduler.tick-duration: {_tickDuration} (expected: 0 < tick-duration in ticks < {long.MaxValue / _wheel.Length}");
 
-            _shutdownTimeout = SchedulerConfig.GetTimeSpan("akka.scheduler.shutdown-timeout");
+            _shutdownTimeout = SchedulerConfig.GetTimeSpan("akka.scheduler.shutdown-timeout", null);
         }
 
         private long _startTime = 0;
@@ -139,11 +142,15 @@ namespace Akka.Actor
 
             while (_startTime == 0)
             {
+#if UNSAFE_THREADING
                 try
                 {
                     _workerInitialized.Wait();
                 }
                 catch (ThreadInterruptedException) { }
+#else
+                _workerInitialized.Wait();
+#endif
             }
         }
 
@@ -222,6 +229,7 @@ namespace Akka.Actor
 
                     }
 
+#if UNSAFE_THREADING
                     try
                     {
                         Thread.Sleep(TimeSpan.FromMilliseconds(sleepMs));
@@ -231,6 +239,9 @@ namespace Akka.Actor
                         if (_workerState == WORKER_STATE_SHUTDOWN)
                             return long.MinValue;
                     }
+#else
+                    Thread.Sleep(TimeSpan.FromMilliseconds(sleepMs));
+#endif
                 }
             }
         }
@@ -379,7 +390,28 @@ namespace Akka.Actor
                 return;
             }
 
-            // todo: log unprocessed scheduler registrations?
+            // Execute all outstanding work items
+            foreach (var task in stopped.Result)
+            {
+                try
+                {
+                    task.Action.Run();
+                }
+                catch (SchedulerException)
+                {
+                    // ignore, this is from terminated actors
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Exception while executing timer task.");
+                }
+                finally
+                {
+                    // free the object from bucket
+                    task.Reset();
+                }
+            }
+            
             _unprocessedRegistrations.Clear();
         }
 
