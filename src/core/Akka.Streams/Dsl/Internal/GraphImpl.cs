@@ -1,12 +1,14 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="GraphImpl.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
+using Akka.Annotations;
 using Akka.Streams.Implementation;
 using Akka.Streams.Util;
+using Akka.Util;
 
 namespace Akka.Streams.Dsl.Internal
 {
@@ -15,6 +17,7 @@ namespace Akka.Streams.Dsl.Internal
     /// </summary>
     /// <typeparam name="TShape">TBD</typeparam>
     /// <typeparam name="TMat">TBD</typeparam>
+    [InternalApi]
     public class GraphImpl<TShape, TMat> : IGraph<TShape, TMat> where TShape : Shape
     {
         /// <summary>
@@ -75,6 +78,7 @@ namespace Akka.Streams.Dsl.Internal
     /// <summary>
     /// INTERNAL API
     /// </summary>
+    [InternalApi]
     public static class ModuleExtractor
     {
         /// <summary>

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SinkCoordinator.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Event;
+using Akka.MultiNodeTestRunner.Shared.Reporting;
 
 namespace Akka.MultiNodeTestRunner.Shared.Sinks
 {
@@ -157,7 +158,7 @@ namespace Akka.MultiNodeTestRunner.Shared.Sinks
             });
             Receive<NodeCompletedSpecWithSuccess>(s => PublishToChildren(s));
             Receive<IList<NodeTest>>(tests => BeginSpec(tests));
-            Receive<EndSpec>(spec => EndSpec());
+            Receive<EndSpec>(spec => EndSpec(spec.ClassName, spec.MethodName, spec.Log));
             Receive<RunnerMessage>(runner => PublishToChildren(runner));
         }
 
@@ -168,10 +169,10 @@ namespace Akka.MultiNodeTestRunner.Shared.Sinks
         }
 
 
-        private void EndSpec()
+        private void EndSpec(string testName, string methodName, SpecLog specLog)
         {
             foreach (var sink in Sinks)
-                sink.EndTest();
+                sink.EndTest(testName, methodName, specLog);
         }
 
         private void BeginSpec(IList<NodeTest> tests)
@@ -185,7 +186,13 @@ namespace Akka.MultiNodeTestRunner.Shared.Sinks
         private void PublishToChildren(RunnerMessage message)
         {
             foreach (var sink in Sinks)
+            {
+#if CORECLR
+                sink.LogRunnerMessage(message.Message, Assembly.GetEntryAssembly().GetName().Name, LogLevel.InfoLevel);
+#else
                 sink.LogRunnerMessage(message.Message, Assembly.GetExecutingAssembly().GetName().Name, LogLevel.InfoLevel);
+#endif
+            }
         }
 
         /// <summary>

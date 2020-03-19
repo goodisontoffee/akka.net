@@ -1,16 +1,16 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="InboundMessageDispatcherSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System.Threading;
 using Akka.Actor;
 using Akka.Configuration;
-using Akka.Remote.Proto;
+using SerializedMessage = Akka.Remote.Serialization.Proto.Msg.Payload;
 using Akka.Util.Internal;
-using Google.ProtocolBuffers;
+using Google.Protobuf;
 using NBench;
 
 namespace Akka.Remote.Tests.Performance
@@ -40,11 +40,11 @@ namespace Akka.Remote.Tests.Performance
         {
             private readonly Counter _counter;
 
-            public BenchmarkActorRef(Counter counter, RemoteActorRefProvider provider)
+            public BenchmarkActorRef(Counter counter, IRemoteActorRefProvider provider)
             {
                 _counter = counter;
                 Provider = provider;
-                Path = new RootActorPath(Provider.DefaultAddress) / "user" / "tempRef";
+                Path = new RootActorPath(provider.DefaultAddress) / "user" / "tempRef";
             }
 
             protected override void TellInternal(object message, IActorRef sender)
@@ -77,6 +77,7 @@ namespace Akka.Remote.Tests.Performance
                   local-address = ""test://MessageDispatcher@0.0.0.0:1111""
                 }
               }
+            }
         ");
 
         [PerfSetup]
@@ -85,8 +86,8 @@ namespace Akka.Remote.Tests.Performance
             _actorSystem = ActorSystem.Create("MessageDispatcher" + Counter.GetAndIncrement(), RemoteHocon);
             _systemAddress = RARP.For(_actorSystem).Provider.DefaultAddress;
             _inboundMessageDispatcherCounter = context.GetCounter(MessageDispatcherThroughputCounterName);
-            _message = SerializedMessage.CreateBuilder().SetSerializerId(0).SetMessage(ByteString.CopyFromUtf8("foo")).Build();
-            _dispatcher = new DefaultMessageDispatcher(_actorSystem, RARP.For(_actorSystem).Provider, _actorSystem.Log);
+            _message = new SerializedMessage { SerializerId = 0, Message = ByteString.CopyFromUtf8("foo") };
+            _dispatcher = new DefaultMessageDispatcher(_actorSystem.AsInstanceOf<ExtendedActorSystem>(), RARP.For(_actorSystem).Provider, _actorSystem.Log);
             _targetActorRef = new BenchmarkActorRef(_inboundMessageDispatcherCounter, RARP.For(_actorSystem).Provider);
         }
 

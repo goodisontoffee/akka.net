@@ -1,13 +1,14 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Messages.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
 using Akka.Event;
+using Akka.MultiNodeTestRunner.Shared.Reporting;
 
 namespace Akka.MultiNodeTestRunner.Shared.Sinks
 {
@@ -35,7 +36,25 @@ namespace Akka.MultiNodeTestRunner.Shared.Sinks
     /// <summary>
     /// Message type for indicating that the current spec has ended.
     /// </summary>
-    public class EndSpec { }
+    public class EndSpec
+    {
+        public EndSpec()
+        {
+            ClassName = null;
+            MethodName = null;
+        }
+
+        public EndSpec(string className, string methodName, SpecLog log)
+        {
+            ClassName = className;
+            MethodName = methodName;
+            Log = log;
+        }
+        
+        public string ClassName { get; }
+        public string MethodName { get; }
+        public SpecLog Log { get; }
+    }
 
     /// <summary>
     /// Message type for signaling that a node has completed a spec successfully

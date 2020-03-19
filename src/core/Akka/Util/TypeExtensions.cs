@@ -1,12 +1,15 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="TypeExtensions.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
+using System.Collections.Concurrent;
 using System.Reflection;
+using System.Text.RegularExpressions;
+using Akka.Annotations;
 
 namespace Akka.Util
 {
@@ -39,15 +42,32 @@ namespace Akka.Util
             return moreGeneralType.IsAssignableFrom(type);
         }
 
+        private static readonly ConcurrentDictionary<Type, string> ShortenedTypeNames = new ConcurrentDictionary<Type, string>();
+
+        private static readonly Regex cleanAssemblyVersionRegex = new Regex(
+            @"(, Version=([\d\.]+))?(, Culture=[^,\] \t]+)?(, PublicKeyToken=(null|[\da-f]+))?",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
         /// <summary>
+        /// INTERNAL API
         /// Utility to be used by implementers to create a manifest from the type.
         /// The manifest is used to look up the type on deserialization.
         /// </summary>
         /// <param name="type">TBD</param>
         /// <returns>Returns the type qualified name including namespace and assembly, but not assembly version.</returns>
+        [InternalApi]
         public static string TypeQualifiedName(this Type type)
         {
-            return type == null ? string.Empty : $"{type.GetTypeInfo().FullName}, {type.GetTypeInfo().Assembly.GetName().Name}";
+            string shortened;
+            if (ShortenedTypeNames.TryGetValue(type, out shortened))
+            {
+                return shortened;
+            }
+
+            shortened = cleanAssemblyVersionRegex.Replace(type.AssemblyQualifiedName, string.Empty);
+            ShortenedTypeNames.TryAdd(type, shortened);
+            
+            return shortened;
         }
     }
 }

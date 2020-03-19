@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="TopicMessages.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -39,6 +39,19 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// </summary>
         public static Count Instance { get; } = new Count();
         private Count() { }
+    }
+
+    /// <summary>
+    /// TBD
+    /// </summary>
+    internal sealed class CountSubscribers
+    {
+        public string Topic { get; }
+
+        public CountSubscribers(string topic)
+        {
+            Topic = topic;
+        }
     }
 
     /// <summary>
@@ -400,6 +413,28 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         public SendToOneSubscriber(object message)
         {
             Message = message;
+        }
+
+        private bool Equals(SendToOneSubscriber other)
+        {
+            return Equals(Message, other.Message);
+        }
+
+        public override bool Equals(object obj)
+        {
+            if (ReferenceEquals(null, obj)) return false;
+            if (ReferenceEquals(this, obj)) return true;
+            return obj is SendToOneSubscriber && Equals((SendToOneSubscriber)obj);
+        }
+
+        public override int GetHashCode()
+        {
+            return (Message != null ? Message.GetHashCode() : 0);
+        }
+
+        public override string ToString()
+        {
+            return $"SendToOneSubscriber<Message:{Message}>";
         }
     }
 

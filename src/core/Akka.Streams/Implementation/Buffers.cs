@@ -1,12 +1,14 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="Buffers.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using Akka.Annotations;
 
 namespace Akka.Streams.Implementation
 {
@@ -133,6 +135,7 @@ namespace Akka.Streams.Implementation
         /// This exception is thrown when the specified <paramref name="size"/> is less than 1.
         /// </exception>
         /// <returns>TBD</returns>
+        [InternalApi]
         public static FixedSizeBuffer<T> Create<T>(int size)
         {
             if (size < 1)
@@ -191,6 +194,8 @@ namespace Akka.Streams.Implementation
         /// </summary>
         public bool NonEmpty => Used != 0;
 
+        public long RemainingCapacity => Capacity - Used;
+
         // for the maintenance parameter see dropHead
         /// <summary>
         /// TBD
@@ -216,6 +221,7 @@ namespace Akka.Streams.Implementation
         /// <param name="index">TBD</param>
         /// <param name="element">TBD</param>
         /// <param name="maintenance">TBD</param>
+        [MethodImpl(MethodImplOptions.NoInlining)]
         public void Put(long index, T element, bool maintenance) => _buffer[ToOffset(index, maintenance)] = element;
 
         /// <summary>
@@ -298,7 +304,7 @@ namespace Akka.Streams.Implementation
             if (maintenance && ReadIndex > int.MaxValue)
             {
                 // In order to be able to run perpetually we must ensure that the counters
-                // don’t overrun into negative territory, so set them back by as many multiples
+                // donâ€™t overrun into negative territory, so set them back by as many multiples
                 // of the capacity as possible when both are above Int.MaxValue.
                 var shift = int.MaxValue - (int.MaxValue % Capacity);
                 ReadIndex -= shift;

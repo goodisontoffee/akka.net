@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="LazySinkSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Akka.Streams.Dsl;
+using Akka.Streams.Stage;
 using Akka.Streams.Supervision;
 using Akka.Streams.TestKit;
 using Akka.Streams.TestKit.Tests;
@@ -49,7 +50,7 @@ namespace Akka.Streams.Tests.Dsl
                 var lazySink = Sink.LazySink((int _) => Task.FromResult(this.SinkProbe<int>()),
                     Fallback<TestSubscriber.Probe<int>>());
                 var taskProbe = Source.From(Enumerable.Range(0, 11)).RunWith(lazySink, Materializer);
-                var probe = taskProbe.AwaitResult(TimeSpan.FromMilliseconds(300));
+                var probe = taskProbe.AwaitResult(RemainingOrDefault);
                 probe.Request(100);
                 Enumerable.Range(0, 11).ForEach(i => probe.ExpectNext(i));
             }, Materializer);
@@ -73,7 +74,7 @@ namespace Akka.Streams.Tests.Dsl
                 taskProbe.Wait(TimeSpan.FromMilliseconds(200)).ShouldBeFalse();
 
                 p.SetResult(this.SinkProbe<int>());
-                var probe = taskProbe.AwaitResult(TimeSpan.FromMilliseconds(300));
+                var probe = taskProbe.AwaitResult(RemainingOrDefault);
                 probe.Request(100);
                 probe.ExpectNext(0);
                 Enumerable.Range(1,10).ForEach(i =>
@@ -93,8 +94,8 @@ namespace Akka.Streams.Tests.Dsl
                 var lazySink = Sink.LazySink((int _) => Task.FromResult(Sink.Aggregate(0, (int i, int i2) => i + i2)),
                     () => Task.FromResult(0));
                 var taskProbe = Source.Empty<int>().RunWith(lazySink, Materializer);
-                var taskResult = taskProbe.AwaitResult(TimeSpan.FromMilliseconds(300));
-                taskResult.AwaitResult(TimeSpan.FromMilliseconds(300)).ShouldBe(0);
+                var taskResult = taskProbe.AwaitResult(RemainingOrDefault);
+                taskResult.AwaitResult(RemainingOrDefault).ShouldBe(0);
             }, Materializer);
         }
 
@@ -106,7 +107,7 @@ namespace Akka.Streams.Tests.Dsl
                 var lazySink = Sink.LazySink((int _) => Task.FromResult(this.SinkProbe<int>()),
                     Fallback<TestSubscriber.Probe<int>>());
                 var taskProbe = Source.Single(1).RunWith(lazySink, Materializer);
-                var taskResult = taskProbe.AwaitResult(TimeSpan.FromMilliseconds(300));
+                var taskResult = taskProbe.AwaitResult(RemainingOrDefault);
                 taskResult.Request(1).ExpectNext(1).ExpectComplete();
             }, Materializer);
         }
@@ -143,7 +144,7 @@ namespace Akka.Streams.Tests.Dsl
                 var sourceSub = sourceProbe.ExpectSubscription();
                 sourceSub.ExpectRequest(1);
                 sourceSub.SendNext(0);
-                var probe = taskProbe.AwaitResult(TimeSpan.FromMilliseconds(300));
+                var probe = taskProbe.AwaitResult(RemainingOrDefault);
                 probe.Request(1).ExpectNext(0);
                 sourceSub.SendError(Ex);
                 probe.ExpectError().Should().Be(Ex);
@@ -187,7 +188,7 @@ namespace Akka.Streams.Tests.Dsl
                 sourceSub.ExpectRequest(1);
                 sourceSub.SendNext(0);
                 sourceSub.ExpectRequest(1);
-                var probe = taskProbe.AwaitResult(TimeSpan.FromMilliseconds(300));
+                var probe = taskProbe.AwaitResult(RemainingOrDefault);
                 probe.Request(1).ExpectNext(0);
                 probe.Cancel();
                 sourceSub.ExpectCancellation();
@@ -217,7 +218,7 @@ namespace Akka.Streams.Tests.Dsl
                 sourceSub.SendNext(0);
                 sourceSub.ExpectRequest(1);
                 sourceSub.SendNext(1);
-                var probe = taskProbe.AwaitResult(TimeSpan.FromMilliseconds(300));
+                var probe = taskProbe.AwaitResult(RemainingOrDefault);
                 probe.Request(1);
                 probe.ExpectNext(1);
                 probe.Cancel();
@@ -238,5 +239,60 @@ namespace Akka.Streams.Tests.Dsl
                 taskProbe.Invoking(t => t.Wait(TimeSpan.FromMilliseconds(300))).ShouldThrow<TestException>();
             }, Materializer);
         }
+
+        [Fact]
+        public void A_LazySink_must_fail_correctly_when_materialization_of_inner_sink_fails()
+        {
+            this.AssertAllStagesStopped(() => 
+            {
+                var matFail = new TestException("fail!");
+
+                var task = Source.Single("whatever")
+                    .RunWith(Sink.LazySink<string, NotUsed>(
+                        str => Task.FromResult(Sink.FromGraph(new FailingInnerMat(matFail))),
+                        () => NotUsed.Instance), Materializer);
+
+                try
+                {
+                    task.Wait(TimeSpan.FromSeconds(1));
+                }
+                catch (AggregateException) { }
+
+                task.IsFaulted.ShouldBe(true);
+                task.Exception.ShouldNotBe(null);
+                task.Exception.InnerException.ShouldBeEquivalentTo(matFail);
+
+            }, Materializer);
+        }
+
+        private sealed class FailingInnerMat : GraphStage<SinkShape<string>>
+        {
+            #region Logic
+            private sealed class FailingLogic : GraphStageLogic
+            {
+                public FailingLogic(Shape shape, TestException ex) : base(shape)
+                {
+                    throw ex;
+                }
+            }
+            #endregion
+
+            public FailingInnerMat(TestException ex)
+            {
+                var inlet = new Inlet<string>("in");
+                Shape = new SinkShape<string>(inlet);
+                _ex = ex;
+            }
+
+            private readonly TestException _ex;
+
+            public override SinkShape<string> Shape { get; }
+
+            protected override GraphStageLogic CreateLogic(Attributes inheritedAttributes)
+            {
+                return new FailingLogic(Shape, _ex);
+            }
+        }
+
     }
 }

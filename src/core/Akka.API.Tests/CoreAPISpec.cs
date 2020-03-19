@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CoreAPISpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using Akka.Actor;
 using Akka.Cluster;
 using Akka.Cluster.Tools.Singleton;
 using Akka.Persistence;
@@ -18,6 +19,13 @@ using ApiApprover;
 using ApprovalTests;
 using Mono.Cecil;
 using Xunit;
+using Akka.Persistence.Query;
+using PublicApiGenerator;
+using static PublicApiGenerator.ApiGenerator;
+using Akka.Cluster.Sharding;
+using Akka.Cluster.Metrics;
+using Akka.Persistence.Query.Sql;
+using Akka.Persistence.Sql.Common.Journal;
 
 namespace Akka.API.Tests
 {
@@ -27,9 +35,7 @@ namespace Akka.API.Tests
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void ApproveCore()
         {
-            var assemblyPath = Path.GetFullPath(typeof(PatternMatch).Assembly.Location);
-            var asm = AssemblyDefinition.ReadAssembly(assemblyPath);
-            var publicApi = Filter(PublicApiGenerator.CreatePublicApiForAssembly(asm));
+            var publicApi = Filter(GeneratePublicApi(typeof(ActorSystem).Assembly));
             Approvals.Verify(publicApi);
         }
 
@@ -37,9 +43,7 @@ namespace Akka.API.Tests
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void ApproveRemote()
         {
-            var assemblyPath = Path.GetFullPath(typeof(RemoteSettings).Assembly.Location);
-            var asm = AssemblyDefinition.ReadAssembly(assemblyPath);
-            var publicApi = Filter(PublicApiGenerator.CreatePublicApiForAssembly(asm));
+            var publicApi = Filter(GeneratePublicApi(typeof(RemoteSettings).Assembly));
             Approvals.Verify(publicApi);
         }
 
@@ -47,9 +51,31 @@ namespace Akka.API.Tests
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void ApprovePersistence()
         {
-            var assemblyPath = Path.GetFullPath(typeof(Persistent).Assembly.Location);
-            var asm = AssemblyDefinition.ReadAssembly(assemblyPath);
-            var publicApi = Filter(PublicApiGenerator.CreatePublicApiForAssembly(asm));
+            var publicApi = Filter(GeneratePublicApi(typeof(Persistent).Assembly));
+            Approvals.Verify(publicApi);
+        }
+
+        [Fact]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void ApprovePersistenceQuery()
+        {
+            var publicApi = Filter(GeneratePublicApi(typeof(PersistenceQuery).Assembly));
+            Approvals.Verify(publicApi);
+        }
+
+        [Fact]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void ApprovePersistenceSqlCommon()
+        {
+            var publicApi = Filter(GeneratePublicApi(typeof(SqlJournal).Assembly));
+            Approvals.Verify(publicApi);
+        }
+
+        [Fact]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void ApprovePersistenceSqlCommonQuery()
+        {
+            var publicApi = Filter(GeneratePublicApi(typeof(SqlReadJournal).Assembly));
             Approvals.Verify(publicApi);
         }
 
@@ -57,9 +83,7 @@ namespace Akka.API.Tests
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void ApproveCluster()
         {
-            var assemblyPath = Path.GetFullPath(typeof(ClusterSettings).Assembly.Location);
-            var asm = AssemblyDefinition.ReadAssembly(assemblyPath);
-            var publicApi = Filter(PublicApiGenerator.CreatePublicApiForAssembly(asm));
+            var publicApi = Filter(GeneratePublicApi(typeof(ClusterSettings).Assembly));
             Approvals.Verify(publicApi);
         }
 
@@ -67,18 +91,39 @@ namespace Akka.API.Tests
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void ApproveClusterTools()
         {
-            var assemblyPath = Path.GetFullPath(typeof(ClusterSingletonManager).Assembly.Location);
-            var asm = AssemblyDefinition.ReadAssembly(assemblyPath);
-            var publicApi = Filter(PublicApiGenerator.CreatePublicApiForAssembly(asm));
+            var publicApi = Filter(GeneratePublicApi(typeof(ClusterSingletonManager).Assembly));
             Approvals.Verify(publicApi);
         }
+
         [Fact]
         [MethodImpl(MethodImplOptions.NoInlining)]
         public void ApproveStreams()
         {
-            var assemblyPath = Path.GetFullPath(typeof(Source).Assembly.Location);
-            var asm = AssemblyDefinition.ReadAssembly(assemblyPath);
-            var publicApi = Filter(PublicApiGenerator.CreatePublicApiForAssembly(asm));
+            var publicApi = Filter(GeneratePublicApi(typeof(Source).Assembly));
+            Approvals.Verify(publicApi);
+        }
+
+        [Fact]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void ApproveClusterSharding()
+        {
+            var publicApi = Filter(GeneratePublicApi(typeof(ClusterSharding).Assembly));
+            Approvals.Verify(publicApi);
+        }
+
+        [Fact]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void ApproveClusterMetrics()
+        {
+            var publicApi = Filter(GeneratePublicApi(typeof(ClusterMetrics).Assembly));
+            Approvals.Verify(publicApi);
+        }
+
+        [Fact]
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public void ApproveDistributedData()
+        {
+            var publicApi = Filter(GeneratePublicApi(typeof(DistributedData.DistributedData).Assembly));
             Approvals.Verify(publicApi);
         }
 

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorRef.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,10 +9,12 @@ using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor.Internal;
+using Akka.Annotations;
 using Akka.Dispatch.SysMsg;
 using Akka.Event;
 using Akka.Util;
@@ -28,6 +30,7 @@ namespace Akka.Actor
     /// necessary to distinguish between local and non-local references, this is the only
     /// method provided on the scope. 
     /// </summary>
+    [InternalApi]
     public interface IActorRefScope
     {
         /// <summary>
@@ -61,7 +64,9 @@ namespace Akka.Actor
     }
 
     /// <summary>
-    /// TBD
+    /// INTERNAL API.
+    /// 
+    /// ActorRef implementation used for one-off tasks.
     /// </summary>
     public class FutureActorRef : MinimalActorRef
     {
@@ -70,7 +75,7 @@ namespace Akka.Actor
         private readonly ActorPath _path;
 
         /// <summary>
-        /// TBD
+        /// INTERNAL API
         /// </summary>
         /// <param name="result">TBD</param>
         /// <param name="unregister">TBD</param>
@@ -118,9 +123,9 @@ namespace Akka.Actor
         protected override void TellInternal(object message, IActorRef sender)
         {
 
-            if (message is ISystemMessage) //we have special handling for system messages
+            if (message is ISystemMessage sysM) //we have special handling for system messages
             {
-                SendSystemMessage(message.AsInstanceOf<ISystemMessage>());
+                SendSystemMessage(sysM);
             }
             else
             {
@@ -163,7 +168,7 @@ namespace Akka.Actor
     /// If you receive a reference to an actor, that actor is guaranteed to have existed at some point
     /// in the past. However, an actor can always be terminated in the future.
     /// 
-    /// If you want to be notified about an actor terminating, call <see cref="IActorContext.Watch"/>
+    /// If you want to be notified about an actor terminating, call <see cref="ICanWatch.Watch(IActorRef)">IActorContext.Watch</see>
     /// on this actor and you'll receive a <see cref="Terminated"/> message when the actor dies or if it
     /// is already dead.
     /// </summary>
@@ -209,12 +214,12 @@ namespace Akka.Actor
     }
 
     /// <summary>
-    /// TBD
+    /// Utility class for working with built-in actor references
     /// </summary>
     public static class ActorRefs
     {
         /// <summary>
-        /// TBD
+        /// Use this value to represent a non-existent actor.
         /// </summary>
         public static readonly Nobody Nobody = Nobody.Instance;
         /// <summary>
@@ -225,7 +230,7 @@ namespace Akka.Actor
     }
 
     /// <summary>
-    /// TBD
+    /// Base implementation for <see cref="IActorRef"/> implementations.
     /// </summary>
     public abstract class ActorRefBase : IActorRef
     {
@@ -290,16 +295,17 @@ namespace Akka.Actor
         /// <inheritdoc/>
         public override string ToString()
         {
-            if(Path.Uid == ActorCell.UndefinedUid) return $"[{Path}]";
+            if (Path.Uid == ActorCell.UndefinedUid) return $"[{Path}]";
             return $"[{Path}#{Path.Uid}]";
         }
 
         /// <inheritdoc/>
         public override bool Equals(object obj)
         {
-            var other = obj as IActorRef;
-            if (other == null) return false;
-            return Equals(other);
+            if (obj is IActorRef other)
+                return Equals(other);
+
+            return false;
         }
 
         /// <inheritdoc/>
@@ -320,21 +326,37 @@ namespace Akka.Actor
         /// </exception>
         public int CompareTo(object obj)
         {
-            if (obj != null && !(obj is IActorRef))
-                throw new ArgumentException("Object must be of type IActorRef.", nameof(obj));
-            return CompareTo((IActorRef) obj);
+            if (obj is null) return 1;
+            if(!(obj is IActorRef other))
+                throw new ArgumentException($"Object must be of type IActorRef, found {obj.GetType()} instead.", nameof(obj));
+
+            return CompareTo(other);
         }
 
-        /// <inheritdoc/>
+        /// <summary>
+        /// Checks equality between this instance and another object.
+        /// </summary>
+        /// <param name="other"></param>
+        /// <returns>
+        /// <c>true</c> if this <see cref="IActorRef"/> instance have the same reference 
+        /// as the <paramref name="other"/> instance, if this <see cref="ActorPath"/> of 
+        /// this <see cref="IActorRef"/> instance is equal to the <paramref name="other"/> instance, 
+        /// and <paramref name="other"/> is not <c>null</c>; otherwise <c>false</c>.
+        /// </returns>
         public bool Equals(IActorRef other)
         {
-            return Path.Uid == other.Path.Uid 
+            if (other is null) return false;
+            if (ReferenceEquals(this, other)) return true;
+
+            return Path.Uid == other.Path.Uid
                 && Path.Equals(other.Path);
         }
 
         /// <inheritdoc/>
         public int CompareTo(IActorRef other)
         {
+            if (other is null) return 1;
+
             var pathComparisonResult = Path.CompareTo(other.Path);
             if (pathComparisonResult != 0) return pathComparisonResult;
             if (Path.Uid < other.Path.Uid) return -1;
@@ -358,6 +380,7 @@ namespace Akka.Actor
     /// Used by built-in <see cref="IActorRef"/> implementations for handling
     /// internal operations that are not exposed directly to end-users.
     /// </summary>
+    [InternalApi]
     public interface IInternalActorRef : IActorRef, IActorRefScope
     {
         /// <summary>
@@ -371,7 +394,7 @@ namespace Akka.Actor
         IActorRefProvider Provider { get; }
 
         /// <summary>
-        /// Obsolete. Use <see cref="Akka.Actor.UntypedActor.Context.Watch(IActorRef)"/> or <see cref="ReceiveActor.Receive{T}(Action{T}, Predicate{T})">Receive&lt;<see cref="Akka.Actor.Terminated"/>&gt;</see>
+        /// Obsolete. Use <see cref="Watch"/> or <see cref="ReceiveActor.Receive{T}(Action{T}, Predicate{T})">Receive&lt;<see cref="Akka.Actor.Terminated"/>&gt;</see>
         /// </summary>
         [Obsolete("Use Context.Watch and Receive<Terminated> [1.1.0]")]
         bool IsTerminated { get; }
@@ -433,6 +456,7 @@ namespace Akka.Actor
     /// 
     /// Abstract implementation of <see cref="IInternalActorRef"/>.
     /// </summary>
+    [InternalApi]
     public abstract class InternalActorRefBase : ActorRefBase, IInternalActorRef
     {
         /// <inheritdoc cref="IInternalActorRef"/>
@@ -481,6 +505,7 @@ namespace Akka.Actor
     /// 
     /// Barebones <see cref="IActorRef"/> with no backing actor or <see cref="ActorCell"/>.
     /// </summary>
+    [InternalApi]
     public abstract class MinimalActorRef : InternalActorRefBase, ILocalRef
     {
         /// <inheritdoc cref="InternalActorRefBase"/>
@@ -530,7 +555,7 @@ namespace Akka.Actor
         /// <inheritdoc cref="InternalActorRefBase"/>
         public override void SendSystemMessage(ISystemMessage message)
         {
-           
+
         }
 
         /// <inheritdoc cref="InternalActorRefBase"/>
@@ -597,25 +622,28 @@ namespace Akka.Actor
     }
 
     /// <summary>
-    /// TBD
+    /// INTERNAL API
+    /// 
+    /// Used to power actors that use an <see cref="ActorCell"/>, which is the majority of them.
     /// </summary>
+    [InternalApi]
     public abstract class ActorRefWithCell : InternalActorRefBase
     {
         /// <summary>
-        /// TBD
+        /// The <see cref="ActorCell"/>.
         /// </summary>
         public abstract ICell Underlying { get; }
 
         /// <summary>
-        /// TBD
+        /// An iterable collection of the actor's children. Empty if there are none.
         /// </summary>
         public abstract IEnumerable<IActorRef> Children { get; }
 
         /// <summary>
-        /// TBD
+        /// Fetches a reference to a single child actor.
         /// </summary>
-        /// <param name="name">TBD</param>
-        /// <returns>TBD</returns>
+        /// <param name="name">The name of the child we're trying to fetch.</param>
+        /// <returns>If the child exists, it returns the child actor. Otherwise, we return <see cref="ActorRefs.Nobody"/>.</returns>
         public abstract IInternalActorRef GetSingleChild(string name);
 
     }
@@ -722,12 +750,12 @@ namespace Akka.Actor
         /// </summary>
         /// <param name="name">TBD</param>
         /// <param name="child">TBD</param>
-        public void RemoveChild(string name,IActorRef child)
+        public void RemoveChild(string name, IActorRef child)
         {
             IInternalActorRef tmp;
             if (!_children.TryRemove(name, out tmp))
             {
-                Log.Warning("{0} trying to remove non-child {1}",Path,name);
+                Log.Warning("{0} trying to remove non-child {1}", Path, name);
             }
         }
 
@@ -764,8 +792,7 @@ override def getChild(name: Iterator[String]): InternalActorRef = {
             var firstName = enumerator.Current;
             if (string.IsNullOrEmpty(firstName))
                 return this;
-            IInternalActorRef child;
-            if (_children.TryGetValue(firstName, out child))
+            if (_children.TryGetValue(firstName, out var child))
                 return child.GetChild(new Enumerable<string>(enumerator));
             return ActorRefs.Nobody;
         }
@@ -818,5 +845,203 @@ override def getChild(name: Iterator[String]): InternalActorRef = {
             }
         }
     }
-}
 
+    /// <summary>
+    /// INTERNAL API
+    /// 
+    /// This kind of ActorRef passes all received messages to the given function for
+    /// performing a non-blocking side-effect. The intended use is to transform the
+    /// message before sending to the real target actor. Such references can be created
+    /// by calling <see cref="ActorCell.AddFunctionRef(Action{IActorRef, object}, string)"/> and must be deregistered when no longer
+    /// needed by calling <see cref="ActorCell.RemoveFunctionRef(FunctionRef)"/>. FunctionRefs do not count
+    /// towards the live children of an actor, they do not receive the Terminate command
+    /// and do not prevent the parent from terminating. FunctionRef is properly
+    /// registered for remote lookup and ActorSelection.
+    /// 
+    /// When using the <see cref="ICanWatch.Watch"/> feature you must ensure that upon reception of the
+    /// Terminated message the watched actorRef is <see cref="ICanWatch.Unwatch"/>ed.
+    /// </summary>
+    internal sealed class FunctionRef : MinimalActorRef
+    {
+        private readonly EventStream _eventStream;
+        private readonly Action<IActorRef, object> _tell;
+
+        private ImmutableHashSet<IActorRef> _watching = ImmutableHashSet<IActorRef>.Empty;
+        private ImmutableHashSet<IActorRef> _watchedBy = ImmutableHashSet<IActorRef>.Empty;
+
+        public FunctionRef(ActorPath path, IActorRefProvider provider, EventStream eventStream, Action<IActorRef, object> tell)
+        {
+            _eventStream = eventStream;
+            _tell = tell;
+            Path = path;
+            Provider = provider;
+        }
+
+        public override ActorPath Path { get; }
+        public override IActorRefProvider Provider { get; }
+        public override bool IsTerminated => Volatile.Read(ref _watchedBy) == null;
+
+        /// <summary>
+        /// Have this FunctionRef watch the given Actor. This method must not be
+        /// called concurrently from different threads, it should only be called by
+        /// its parent Actor.
+        /// 
+        /// Upon receiving the Terminated message, <see cref="Unwatch"/> must be called from a
+        /// safe context (i.e. normally from the parent Actor).
+        /// </summary>
+        public void Watch(IActorRef actorRef)
+        {
+            _watching = _watching.Add(actorRef);
+            var internalRef = (IInternalActorRef)actorRef;
+            internalRef.SendSystemMessage(new Watch(internalRef, this));
+        }
+
+        /// <summary>
+        /// Have this FunctionRef unwatch the given Actor. This method must not be
+        /// called concurrently from different threads, it should only be called by
+        /// its parent Actor.
+        /// </summary>
+        public void Unwatch(IActorRef actorRef)
+        {
+            _watching = _watching.Remove(actorRef);
+            var internalRef = (IInternalActorRef)actorRef;
+            internalRef.SendSystemMessage(new Unwatch(internalRef, this));
+
+        }
+
+        /// <summary>
+        /// Query whether this FunctionRef is currently watching the given Actor. This
+        /// method must not be called concurrently from different threads, it should
+        /// only be called by its parent Actor.
+        /// </summary>
+        public bool IsWatching(IActorRef actorRef) => _watching.Contains(actorRef);
+
+        protected override void TellInternal(object message, IActorRef sender) => _tell(sender, message);
+
+        public override void SendSystemMessage(ISystemMessage message)
+        {
+            switch (message)
+            {
+                case Watch watch:
+                    AddWatcher(watch.Watchee, watch.Watcher);
+                    break;
+                case Unwatch unwatch:
+                    RemoveWatcher(unwatch.Watchee, unwatch.Watcher);
+                    break;
+                case DeathWatchNotification deathWatch:
+                    this.Tell(new Terminated(deathWatch.Actor, existenceConfirmed: true, addressTerminated: false), deathWatch.Actor);
+                    break;
+            }
+        }
+
+        private void SendTerminated()
+        {
+            var watchedBy = Interlocked.Exchange(ref _watchedBy, null);
+            if (watchedBy != null)
+            {
+                if (!watchedBy.IsEmpty)
+                {
+                    foreach (var watcher in watchedBy)
+                        SendTerminated(watcher);
+                }
+
+                if (!_watching.IsEmpty)
+                {
+                    foreach (var watched in _watching)
+                        UnwatchWatched(watched);
+
+                    _watching = ImmutableHashSet<IActorRef>.Empty;
+                }
+            }
+        }
+
+        private void SendTerminated(IActorRef watcher)
+        {
+            if (watcher is IInternalActorRef scope)
+                scope.SendSystemMessage(new DeathWatchNotification(this, existenceConfirmed: true, addressTerminated: false));
+        }
+
+        private void UnwatchWatched(IActorRef watched)
+        {
+            if (watched is IInternalActorRef internalActorRef)
+                internalActorRef.SendSystemMessage(new Unwatch(internalActorRef, this));
+        }
+
+        public override void Stop() => SendTerminated();
+
+        private void AddWatcher(IInternalActorRef watchee, IInternalActorRef watcher)
+        {
+            while (true)
+            {
+                var watchedBy = Volatile.Read(ref _watchedBy);
+                if (watchedBy == null)
+                    SendTerminated(watcher);
+                else
+                {
+                    var watcheeSelf = Equals(watchee, this);
+                    var watcherSelf = Equals(watcher, this);
+
+                    if (watcheeSelf && !watcherSelf)
+                    {
+                        if (!watchedBy.Contains(watcher) && !ReferenceEquals(watchedBy, Interlocked.CompareExchange(ref _watchedBy, watchedBy.Add(watcher), watchedBy)))
+                        {
+                            continue;
+                        }
+                    }
+                    else if (!watcheeSelf && watcherSelf)
+                    {
+                        Publish(new Warning(Path.ToString(), typeof(FunctionRef), $"Externally triggered watch from {watcher} to {watchee} is illegal on FunctionRef"));
+                    }
+                    else
+                    {
+                        Publish(new Warning(Path.ToString(), typeof(FunctionRef), $"BUG: illegal Watch({watchee},{watcher}) for {this}"));
+                    }
+                }
+
+                break;
+            }
+        }
+
+        private void RemoveWatcher(IInternalActorRef watchee, IInternalActorRef watcher)
+        {
+            while (true)
+            {
+                var watchedBy = Volatile.Read(ref _watchedBy);
+                if (watchedBy == null)
+                    SendTerminated(watcher);
+                else
+                {
+                    var watcheeSelf = Equals(watchee, this);
+                    var watcherSelf = Equals(watcher, this);
+
+                    if (watcheeSelf && !watcherSelf)
+                    {
+                        if (!watchedBy.Contains(watcher) && !ReferenceEquals(watchedBy, Interlocked.CompareExchange(ref _watchedBy, watchedBy.Remove(watcher), watchedBy)))
+                        {
+                            continue;
+                        }
+                    }
+                    else if (!watcheeSelf && watcherSelf)
+                    {
+                        Publish(new Warning(Path.ToString(), typeof(FunctionRef), $"Externally triggered watch from {watcher} to {watchee} is illegal on FunctionRef"));
+                    }
+                    else
+                    {
+                        Publish(new Warning(Path.ToString(), typeof(FunctionRef), $"BUG: illegal Watch({watchee},{watcher}) for {this}"));
+                    }
+                }
+
+                break;
+            }
+        }
+
+        private void Publish(LogEvent e)
+        {
+            try
+            {
+                _eventStream.Publish(e);
+            }
+            catch (Exception) { }
+        }
+    }
+}

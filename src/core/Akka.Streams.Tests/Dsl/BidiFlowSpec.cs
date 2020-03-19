@@ -1,7 +1,7 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="BidiFlowSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -35,7 +35,7 @@ namespace Akka.Streams.Tests.Dsl
                 BidiFlow.FromFlows(
                     Flow.Create<int>().Select(x => ((long) x) + 2).WithAttributes(Attributes.CreateName("top")),
                     Flow.Create<ByteString>()
-                        .Select(x => x.DecodeString(Encoding.UTF8))
+                        .Select(x => x.ToString(Encoding.UTF8))
                         .WithAttributes(Attributes.CreateName("bottom")));
         }
 
@@ -56,7 +56,7 @@ namespace Akka.Streams.Tests.Dsl
                 b.From(Source.Single(42).MapMaterializedValue(_=>Task.FromResult(0))).To(s);
 
                 var top = b.Add(Flow.Create<int>().Select(x => ((long) x) + 2));
-                var bottom = b.Add(Flow.Create<ByteString>().Select(x => x.DecodeString(Encoding.UTF8)));
+                var bottom = b.Add(Flow.Create<ByteString>().Select(x => x.ToString(Encoding.UTF8)));
                 return new BidiShape<int,long,ByteString, string>(top.Inlet, top.Outlet, bottom.Inlet, bottom.Outlet);
             }));
         }
@@ -74,14 +74,14 @@ namespace Akka.Streams.Tests.Dsl
                     var s = b.Add(Bidi());
                     b.From(
                         Source.Single(1)
-                            .MapMaterializedValue(_ => Tuple.Create(Task.FromResult(1L), Task.FromResult(""))))
+                            .MapMaterializedValue(_ => (Task.FromResult(1L), Task.FromResult(""))))
                         .To(s.Inlet1);
                     b.From(s.Outlet1).To(st);
                     b.To(sb).From(s.Outlet2);
                     b.To(s.Inlet2)
                         .From(
                             Source.Single(Bytes)
-                                .MapMaterializedValue(_ => Tuple.Create(Task.FromResult(1L), Task.FromResult(""))));
+                                .MapMaterializedValue(_ => (Task.FromResult(1L), Task.FromResult(""))));
 
                     return ClosedShape.Instance;
                 })).Run(Materializer);

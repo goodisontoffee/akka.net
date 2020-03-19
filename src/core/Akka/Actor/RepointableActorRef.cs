@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="RepointableActorRef.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Akka.Actor.Internal;
+using Akka.Annotations;
 using Akka.Dispatch;
 using Akka.Dispatch.SysMsg;
 using Akka.Event;
@@ -292,8 +293,7 @@ namespace Akka.Actor
                     return ActorRefs.Nobody;
                 default:
                     var nameAndUid = ActorCell.SplitNameAndUid(next);
-                    IChildStats stats;
-                    if (Lookup.TryGetChildStatsByName(nameAndUid.Name, out stats))
+                    if (Lookup.TryGetChildStatsByName(nameAndUid.Name, out var stats))
                     {
                         var crs = stats as ChildRestartStats;
                         var uid = nameAndUid.Uid;
@@ -304,6 +304,10 @@ namespace Akka.Actor
                             else
                                 return crs.Child;
                         }
+                    }
+                    else if (Lookup is ActorCell cell && cell.TryGetFunctionRef(nameAndUid.Name, nameAndUid.Uid, out var functionRef))
+                    {
+                        return functionRef;
                     }
                     return ActorRefs.Nobody;
             }
@@ -332,6 +336,7 @@ namespace Akka.Actor
     /// <summary>
     /// INTERNAL API
     /// </summary>
+    [InternalApi]
     public class UnstartedCell : ICell
     {
         private readonly ActorSystemImpl _system;
@@ -340,7 +345,7 @@ namespace Akka.Actor
         private readonly IInternalActorRef _supervisor;
         private readonly object _lock = new object();
 
-       /* Both queues must be accessed via lock */
+        /* Both queues must be accessed via lock */
         private readonly LinkedList<Envelope> _messageQueue = new LinkedList<Envelope>();
         private LatestFirstSystemMessageList _sysMsgQueue = SystemMessageList.LNil;
 

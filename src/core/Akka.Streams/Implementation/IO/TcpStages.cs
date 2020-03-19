@@ -1,7 +1,7 @@
-//-----------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------
 // <copyright file="TcpStages.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,6 +10,7 @@ using System.Collections.Immutable;
 using System.Net;
 using System.Threading.Tasks;
 using Akka.Actor;
+using Akka.Annotations;
 using Akka.IO;
 using Akka.Pattern;
 using Akka.Streams.Dsl;
@@ -35,11 +36,13 @@ namespace Akka.Streams.Implementation.IO
 
             private readonly AtomicCounterLong _connectionFlowsAwaitingInitialization = new AtomicCounterLong();
             private readonly ConnectionSourceStage _stage;
+            private IActorRef _listener;
             private readonly TaskCompletionSource<StreamTcp.ServerBinding> _bindingPromise;
             private readonly TaskCompletionSource<NotUsed> _unbindPromise = new TaskCompletionSource<NotUsed>();
-            private IActorRef _listener;
+            private bool _unbindStarted = false;
 
-            public ConnectionSourceStageLogic(Shape shape, ConnectionSourceStage stage, TaskCompletionSource<StreamTcp.ServerBinding> bindingPromise) : base(shape)
+            public ConnectionSourceStageLogic(Shape shape, ConnectionSourceStage stage, TaskCompletionSource<StreamTcp.ServerBinding> bindingPromise)
+                : base(shape)
             {
                 _stage = stage;
                 _bindingPromise = bindingPromise;
@@ -50,7 +53,7 @@ namespace Akka.Streams.Implementation.IO
             public void OnPull()
             {
                 // Ignore if still binding
-                _listener?.Tell(new Tcp.ResumeAccepting(1), StageActorRef);
+                _listener?.Tell(new Tcp.ResumeAccepting(1), StageActor.Ref);
             }
 
             public void OnDownstreamFinish() => TryUnbind();
@@ -71,88 +74,97 @@ namespace Akka.Streams.Implementation.IO
                 // FIXME: Previous code was wrong, must add new tests
                 var handler = tcpFlow;
                 if (_stage._idleTimeout.HasValue)
-                    handler = tcpFlow.Join(BidiFlow.BidirectionalIdleTimeout<ByteString, ByteString>(_stage._idleTimeout.Value));
+                    handler = tcpFlow.Join(TcpIdleTimeout.Create(_stage._idleTimeout.Value, connected.RemoteAddress));
 
                 return new StreamTcp.IncomingConnection(connected.LocalAddress, connected.RemoteAddress, handler);
             }
 
             private void TryUnbind()
             {
-                if (_listener == null)
-                    return;
+                if (_listener != null && !_unbindStarted)
+                {
+                    _unbindStarted = true;
+                    SetKeepGoing(true);
+                    _listener.Tell(Tcp.Unbind.Instance, StageActor.Ref);
+                }
+            }
 
-                StageActorRef.Unwatch(_listener);
-                SetKeepGoing(true);
-                _listener.Tell(Tcp.Unbind.Instance, StageActorRef);
+            private void UnbindCompleted()
+            {
+                StageActor.Unwatch(_listener);
+                if (_connectionFlowsAwaitingInitialization.Current == 0)
+                    CompleteStage();
+                else
+                    ScheduleOnce(BindShutdownTimer, _stage._bindShutdownTimeout);
             }
 
             protected internal override void OnTimer(object timerKey)
             {
-                if (BindShutdownTimer.Equals(timerKey))
+                if (Equals(BindShutdownTimer, timerKey))
                     CompleteStage(); // TODO need to manually shut down instead right?
             }
 
             public override void PreStart()
             {
-                GetStageActorRef(Receive);
-                _stage._tcpManager.Tell(new Tcp.Bind(StageActorRef, _stage._endpoint, _stage._backlog, _stage._options, pullMode: true), StageActorRef);
+                GetStageActor(Receive);
+                _stage._tcpManager.Tell(new Tcp.Bind(StageActor.Ref, _stage._endpoint, _stage._backlog, _stage._options, pullMode: true), StageActor.Ref);
             }
 
-            private void Receive(Tuple<IActorRef, object> args)
+            private void Receive((IActorRef, object) args)
             {
                 var sender = args.Item1;
                 var msg = args.Item2;
-                msg.Match()
-                    .With<Tcp.Bound>(bound =>
-                    {
-                        _listener = sender;
-                        StageActorRef.Watch(_listener);
+                if (msg is Tcp.Bound)
+                {
+                    var bound = (Tcp.Bound)msg;
+                    _listener = sender;
+                    StageActor.Watch(_listener);
 
-                        if (IsAvailable(_stage._out))
-                            _listener.Tell(new Tcp.ResumeAccepting(1), StageActorRef);
+                    if (IsAvailable(_stage._out))
+                        _listener.Tell(new Tcp.ResumeAccepting(1), StageActor.Ref);
 
-                        var thisStage = StageActorRef;
-                        _bindingPromise.TrySetResult(new StreamTcp.ServerBinding(bound.LocalAddress, () =>
-                        {
-                            // Beware, sender must be explicit since stageActor.ref will be invalid to access after the stage stopped
-                            thisStage.Tell(Tcp.Unbind.Instance, thisStage);
-                            return _unbindPromise.Task;
-                        }));
-                    })
-                    .With<Tcp.CommandFailed>(() =>
+                    var thisStage = StageActor.Ref;
+                    var binding = new StreamTcp.ServerBinding(bound.LocalAddress, () =>
                     {
-                        var ex = BindFailedException.Instance;
-                        _bindingPromise.TrySetException(ex);
-                        _unbindPromise.TrySetResult(NotUsed.Instance);
-                        FailStage(ex);
-                    })
-                    .With<Tcp.Connected>(c =>
-                    {
-                        Push(_stage._out, ConnectionFor(c, sender));
-                    })
-                    .With<Tcp.Unbind>(() =>
-                    {
-                        if (!IsClosed(_stage._out) && _listener != null)
-                            TryUnbind();
-                    })
-                    .With<Tcp.Unbound>(() => // If we're unbound then just shut down
-                    {
-                        if (_connectionFlowsAwaitingInitialization.Current == 0)
-                            CompleteStage();
-                        else
-                            ScheduleOnce(BindShutdownTimer, _stage._bindShutdownTimeout);
-                    })
-                    .With<Terminated>(terminated =>
-                    {
-                        if (Equals(terminated.ActorRef, _listener))
-                            FailStage(new IllegalStateException("IO Listener actor terminated unexpectedly"));
+                        // Beware, sender must be explicit since stageActor.ref will be invalid to access after the stage stopped
+                        thisStage.Tell(Tcp.Unbind.Instance, thisStage);
+                        return _unbindPromise.Task;
                     });
+
+                    _bindingPromise.NonBlockingTrySetResult(binding);
+                }
+                else if (msg is Tcp.CommandFailed)
+                {
+                    var ex = BindFailedException.Instance;
+                    _bindingPromise.NonBlockingTrySetException(ex);
+                    _unbindPromise.TrySetResult(NotUsed.Instance);
+                    FailStage(ex);
+                }
+                else if (msg is Tcp.Connected)
+                {
+                    var connected = (Tcp.Connected)msg;
+                    Push(_stage._out, ConnectionFor(connected, sender));
+                }
+                else if (msg is Tcp.Unbind)
+                {
+                    if (!IsClosed(_stage._out) && !ReferenceEquals(_listener, null))
+                        TryUnbind();
+                }
+                else if (msg is Tcp.Unbound)
+                {
+                    UnbindCompleted();
+                }
+                else if (msg is Terminated)
+                {
+                    if (_unbindStarted) UnbindCompleted();
+                    else FailStage(new IllegalStateException("IO Listener actor terminated unexpectedly"));
+                }
             }
 
             public override void PostStop()
             {
                 _unbindPromise.TrySetResult(NotUsed.Instance);
-                _bindingPromise.TrySetException(
+                _bindingPromise.NonBlockingTrySetException(
                     new NoSuchElementException("Binding was unbound before it was completely finished"));
             }
         }
@@ -210,7 +222,7 @@ namespace Akka.Streams.Implementation.IO
         /// <returns>TBD</returns>
         public override ILogicAndMaterializedValue<Task<StreamTcp.ServerBinding>> CreateLogicAndMaterializedValue(Attributes inheritedAttributes)
         {
-            var bindingPromise = new TaskCompletionSource<StreamTcp.ServerBinding>();
+            var bindingPromise = TaskEx.NonBlockingTaskCompletionSource<StreamTcp.ServerBinding>();
             var logic = new ConnectionSourceStageLogic(Shape, this, bindingPromise);
             return new LogicAndMaterializedValue<Task<StreamTcp.ServerBinding>>(logic, bindingPromise.Task);
         }
@@ -219,6 +231,7 @@ namespace Akka.Streams.Implementation.IO
     /// <summary>
     /// INTERNAL API
     /// </summary>
+    [InternalApi]
     public class IncomingConnectionStage : GraphStage<FlowShape<ByteString, ByteString>>
     {
         private readonly IActorRef _connection;
@@ -264,14 +277,14 @@ namespace Akka.Streams.Implementation.IO
                 throw new IllegalStateException("Cannot materialize an incoming connection Flow twice.");
             _hasBeenCreated.Value = true;
 
-            return new TcpConnectionStage.TcpStreamLogic(Shape, new TcpConnectionStage.Inbound(_connection, _halfClose));
+            return new TcpConnectionStage.TcpStreamLogic(Shape, new TcpConnectionStage.Inbound(_connection, _halfClose), _remoteAddress);
         }
 
         /// <summary>
         /// TBD
         /// </summary>
         /// <returns>TBD</returns>
-        public override string ToString() => $"TCP-from {_remoteAddress}";
+        public override string ToString() => $"TCP-from({_remoteAddress})";
     }
 
     /// <summary>
@@ -285,9 +298,9 @@ namespace Akka.Streams.Implementation.IO
 
             private WriteAck()
             {
-                
+
             }
-            
+
         }
 
         /// <summary>
@@ -370,36 +383,37 @@ namespace Akka.Streams.Implementation.IO
         }
 
         /// <summary>
-        /// TBD
+        /// This is a *non-detached* design, i.e. this does not prefetch itself any of the inputs. It relies on downstream
+        /// stages to provide the necessary prefetch on `bytesOut` and the framework to do the proper prefetch in the buffer
+        /// backing `bytesIn`. If prefetch on `bytesOut` is required (i.e. user stages cannot be trusted) then it is better
+        /// to attach an extra, fused buffer to the end of this flow. Keeping this stage non-detached makes it much simpler and
+        /// easier to maintain and understand.
         /// </summary>
         internal sealed class TcpStreamLogic : GraphStageLogic
         {
             private readonly ITcpRole _role;
+            private readonly EndPoint _remoteAddress;
             private readonly Inlet<ByteString> _bytesIn;
             private readonly Outlet<ByteString> _bytesOut;
             private IActorRef _connection;
             private readonly OutHandler _readHandler;
-
-            /// <summary>
-            /// TBD
-            /// </summary>
-            /// <param name="shape">TBD</param>
-            /// <param name="role">TBD</param>
-            public TcpStreamLogic(FlowShape<ByteString, ByteString> shape, ITcpRole role) : base(shape)
+            
+            public TcpStreamLogic(FlowShape<ByteString, ByteString> shape, ITcpRole role, EndPoint remoteAddress) : base(shape)
             {
                 _role = role;
+                _remoteAddress = remoteAddress;
                 _bytesIn = shape.Inlet;
                 _bytesOut = shape.Outlet;
 
                 _readHandler = new LambdaOutHandler(
-                    onPull: () => _connection.Tell(Tcp.ResumeReading.Instance, StageActorRef),
+                    onPull: () => _connection.Tell(Tcp.ResumeReading.Instance, StageActor.Ref),
                     onDownstreamFinish: () =>
                     {
                         if (!IsClosed(_bytesIn))
-                            _connection.Tell(Tcp.ResumeReading.Instance, StageActorRef);
+                            _connection.Tell(Tcp.ResumeReading.Instance, StageActor.Ref);
                         else
                         {
-                            _connection.Tell(Tcp.Abort.Instance, StageActorRef);
+                            _connection.Tell(Tcp.Abort.Instance, StageActor.Ref);
                             CompleteStage();
                         }
                     });
@@ -411,17 +425,17 @@ namespace Akka.Streams.Implementation.IO
                     {
                         var elem = Grab(_bytesIn);
                         ReactiveStreamsCompliance.RequireNonNullElement(elem);
-                        _connection.Tell(Tcp.Write.Create(elem, WriteAck.Instance), StageActorRef);
+                        _connection.Tell(Tcp.Write.Create(elem, WriteAck.Instance), StageActor.Ref);
                     },
                     onUpstreamFinish: () =>
                     {
                         // Reading has stopped before, either because of cancel, or PeerClosed, so just Close now
                         // (or half-close is turned off)
                         if (IsClosed(_bytesOut) || !_role.HalfClose)
-                            _connection.Tell(Tcp.Close.Instance, StageActorRef);
+                            _connection.Tell(Tcp.Close.Instance, StageActor.Ref);
                         // We still read, so we only close the write side
                         else if (_connection != null)
-                            _connection.Tell(Tcp.ConfirmedClose.Instance, StageActorRef);
+                            _connection.Tell(Tcp.ConfirmedClose.Instance, StageActor.Ref);
                         else
                             CompleteStage();
                     },
@@ -431,9 +445,8 @@ namespace Akka.Streams.Implementation.IO
                         {
                             if (Interpreter.Log.IsDebugEnabled)
                                 Interpreter.Log.Debug(
-                                    $"Aborting tcp connection because of upstream failure: {ex.Message}\n{ex.StackTrace}");
-
-                            _connection.Tell(Tcp.Abort.Instance, StageActorRef);
+                                    $"Aborting tcp connection to {_remoteAddress} because of upstream failure: {ex.Message}\n{ex.StackTrace}");
+                            _connection.Tell(Tcp.Abort.Instance, StageActor.Ref);
                         }
                         else
                             FailStage(ex);
@@ -452,15 +465,15 @@ namespace Akka.Streams.Implementation.IO
                     var inbound = (Inbound)_role;
                     SetHandler(_bytesOut, _readHandler);
                     _connection = inbound.Connection;
-                    GetStageActorRef(Connected).Watch(_connection);
-                    _connection.Tell(new Tcp.Register(StageActorRef, keepOpenonPeerClosed: true, useResumeWriting: false), StageActorRef);
+                    GetStageActor(Connected).Watch(_connection);
+                    _connection.Tell(new Tcp.Register(StageActor.Ref, keepOpenOnPeerClosed: true, useResumeWriting: false), StageActor.Ref);
                     Pull(_bytesIn);
                 }
                 else
                 {
                     var outbound = (Outbound)_role;
-                    GetStageActorRef(Connecting(outbound)).Watch(outbound.Manager);
-                    outbound.Manager.Tell(outbound.ConnectCmd, StageActorRef);
+                    GetStageActor(Connecting(outbound)).Watch(outbound.Manager);
+                    outbound.Manager.Tell(outbound.ConnectCmd, StageActor.Ref);
                 }
             }
 
@@ -471,7 +484,7 @@ namespace Akka.Streams.Implementation.IO
             {
                 if (_role is Outbound)
                 {
-                    var outbound = (Outbound) _role;
+                    var outbound = (Outbound)_role;
                     // Fail if has not been completed with an address earlier
                     outbound.LocalAddressPromise.TrySetException(new StreamTcpException("Connection failed"));
                 }
@@ -484,53 +497,53 @@ namespace Akka.Streams.Implementation.IO
                     var sender = args.Item1;
                     var msg = args.Item2;
 
-                    msg.Match()
-                        .With<Terminated>(() => FailStage(new StreamTcpException("The IO manager actor (TCP) has terminated. Stopping now.")))
-                        .With<Tcp.CommandFailed>(failed => FailStage(new StreamTcpException($"Tcp command {failed.Cmd} failed")))
-                        .With<Tcp.Connected>(c =>
-                        {
-                            ((Outbound)_role).LocalAddressPromise.TrySetResult(c.LocalAddress);
-                            _connection = sender;
-                            SetHandler(_bytesOut, _readHandler);
-                            StageActorRef.Unwatch(outbound.Manager);
-                            StageActorRef.Become(Connected);
-                            StageActorRef.Watch(_connection);
-                            _connection.Tell(new Tcp.Register(StageActorRef, keepOpenonPeerClosed: true, useResumeWriting: false), StageActorRef);
+                    if (msg is Terminated)
+                        FailStage(new StreamTcpException("The IO manager actor (TCP) has terminated. Stopping now."));
+                    else if (msg is Tcp.CommandFailed)
+                        FailStage(new StreamTcpException($"Tcp command {((Tcp.CommandFailed)msg).Cmd} failed"));
+                    else if (msg is Tcp.Connected)
+                    {
+                        var connected = (Tcp.Connected)msg;
 
-                            if (IsAvailable(_bytesOut))
-                                _connection.Tell(Tcp.ResumeReading.Instance, StageActorRef);
+                        ((Outbound)_role).LocalAddressPromise.TrySetResult(connected.LocalAddress);
+                        _connection = sender;
+                        SetHandler(_bytesOut, _readHandler);
+                        StageActor.Unwatch(outbound.Manager);
+                        StageActor.Become(Connected);
+                        StageActor.Watch(_connection);
+                        _connection.Tell(new Tcp.Register(StageActor.Ref, keepOpenOnPeerClosed: true, useResumeWriting: false), StageActor.Ref);
 
-                            Pull(_bytesIn);
-                        });
+                        if (IsAvailable(_bytesOut))
+                            _connection.Tell(Tcp.ResumeReading.Instance, StageActor.Ref);
+
+                        Pull(_bytesIn);
+                    }
                 };
 
             }
 
-            private void Connected(Tuple<IActorRef, object> args)
+            private void Connected((IActorRef, object) args)
             {
                 var msg = args.Item2;
 
-                msg.Match()
-                    .With<Terminated>(() => FailStage(new StreamTcpException("The connection actor has terminated. Stopping now.")))
-                    .With<Tcp.CommandFailed>(failed => FailStage(new StreamTcpException($"Tcp command {failed.Cmd} failed")))
-                    .With<Tcp.ErrorClosed>(cause => FailStage(new StreamTcpException($"The connection closed with error: {cause}")))
-                    .With<Tcp.Aborted>(() => FailStage(new StreamTcpException("The connection has been aborted")))
-                    .With<Tcp.Closed>(CompleteStage)
-                    .With<Tcp.ConfirmedClosed>(CompleteStage)
-                    .With<Tcp.PeerClosed>(() => Complete(_bytesOut))
-                    .With<Tcp.Received>(received =>
-                    {
-                        // Keep on reading even when closed. There is no "close-read-side" in TCP
-                        if (IsClosed(_bytesOut))
-                            _connection.Tell(Tcp.ResumeReading.Instance, StageActorRef);
-                        else
-                            Push(_bytesOut, received.Data);
-                    })
-                    .With<WriteAck>(() =>
-                    {
-                        if (!IsClosed(_bytesIn))
-                            Pull(_bytesIn);
-                    });
+                if (msg is Terminated) FailStage(new StreamTcpException("The connection actor has terminated. Stopping now."));
+                else if (msg is Tcp.CommandFailed) FailStage(new StreamTcpException($"Tcp command {((Tcp.CommandFailed)msg).Cmd} failed"));
+                else if (msg is Tcp.ErrorClosed) FailStage(new StreamTcpException($"The connection closed with error: {((Tcp.ErrorClosed)msg).Cause}"));
+                else if (msg is Tcp.Aborted) FailStage(new StreamTcpException("The connection has been aborted"));
+                else if (msg is Tcp.Closed) CompleteStage();
+                else if (msg is Tcp.ConfirmedClosed) CompleteStage();
+                else if (msg is Tcp.PeerClosed) Complete(_bytesOut);
+                else if (msg is Tcp.Received)
+                {
+                    var received = (Tcp.Received)msg;
+                    // Keep on reading even when closed. There is no "close-read-side" in TCP
+                    if (IsClosed(_bytesOut)) _connection.Tell(Tcp.ResumeReading.Instance, StageActor.Ref);
+                    else Push(_bytesOut, received.Data);
+                }
+                else if (msg is WriteAck)
+                {
+                    if (!IsClosed(_bytesIn)) Pull(_bytesIn);
+                }
             }
         }
     }
@@ -568,7 +581,7 @@ namespace Akka.Streams.Implementation.IO
             _options = options;
             _halfClose = halfClose;
             _connectionTimeout = connectionTimeout;
-            Shape  = new FlowShape<ByteString, ByteString>(_bytesIn, _bytesOut);
+            Shape = new FlowShape<ByteString, ByteString>(_bytesIn, _bytesOut);
         }
 
         /// <summary>
@@ -590,21 +603,14 @@ namespace Akka.Streams.Implementation.IO
         {
             var localAddressPromise = new TaskCompletionSource<EndPoint>();
             var outgoingConnectionPromise = new TaskCompletionSource<StreamTcp.OutgoingConnection>();
-            localAddressPromise.Task.ContinueWith(
-                t =>
+            localAddressPromise.Task.ContinueWith(t =>
                 {
-                    if (t.IsCanceled)
-                        outgoingConnectionPromise.TrySetCanceled();
-                    else if (t.IsFaulted)
-                        outgoingConnectionPromise.TrySetException(t.Exception);
-                    else
-                        outgoingConnectionPromise.TrySetResult(new StreamTcp.OutgoingConnection(_remoteAddress, t.Result));
+                    if (t.IsCanceled) outgoingConnectionPromise.TrySetCanceled();
+                    else if (t.IsFaulted) outgoingConnectionPromise.TrySetException(t.Exception);
+                    else outgoingConnectionPromise.TrySetResult(new StreamTcp.OutgoingConnection(_remoteAddress, t.Result));
                 }, TaskContinuationOptions.AttachedToParent);
 
-            var logic = new TcpConnectionStage.TcpStreamLogic(Shape,
-                new TcpConnectionStage.Outbound(_tcpManager,
-                    new Tcp.Connect(_remoteAddress, _localAddress, _options, _connectionTimeout, pullMode: true),
-                    localAddressPromise, _halfClose));
+            var logic = new TcpConnectionStage.TcpStreamLogic(Shape, new TcpConnectionStage.Outbound(_tcpManager, new Tcp.Connect(_remoteAddress, _localAddress, _options, _connectionTimeout, pullMode: true), localAddressPromise, _halfClose), _remoteAddress);
 
             return new LogicAndMaterializedValue<Task<StreamTcp.OutgoingConnection>>(logic, outgoingConnectionPromise.Task);
         }
@@ -613,6 +619,30 @@ namespace Akka.Streams.Implementation.IO
         /// TBD
         /// </summary>
         /// <returns>TBD</returns>
-        public override string ToString() => $"TCP-to {_remoteAddress}";
+        public override string ToString() => $"TCP-to({_remoteAddress})";
+    }
+
+    /// <summary>
+    /// INTERNAL API
+    /// </summary>
+    internal static class TcpIdleTimeout
+    {
+        public static BidiFlow<ByteString, ByteString, ByteString, ByteString, NotUsed> Create(TimeSpan idleTimeout, EndPoint remoteAddress = null)
+        {
+            var connectionString = remoteAddress == null ? "" : $" on connection to [{remoteAddress}]";
+
+            var idleException = new TcpIdleTimeoutException(
+                $"TCP idle-timeout encountered{connectionString}, no bytes passed in the last {idleTimeout}",
+                idleTimeout);
+
+            var toNetTimeout = BidiFlow.FromFlows(
+                Flow.Create<ByteString>().SelectError(e => e is TimeoutException ? idleException : e),
+                Flow.Create<ByteString>());
+
+            var fromNetTimeout = toNetTimeout.Reversed(); // now the bottom flow transforms the exception, the top one doesn't (since that one is "fromNet") 
+
+            return fromNetTimeout.Atop(BidiFlow.BidirectionalIdleTimeout<ByteString, ByteString>(idleTimeout))
+                .Atop(toNetTimeout);
+        }
     }
 }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Extensions.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -130,22 +130,9 @@ namespace Akka.Util.Internal
         /// <returns>TBD</returns>
         public static TValue GetOrElse<TKey, TValue>(this IDictionary<TKey, TValue> hash, TKey key, TValue elseValue)
         {
-            if (hash.ContainsKey(key)) return hash[key];
+            if (hash.TryGetValue(key, out var value))
+                return value;
             return elseValue;
-        }
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <typeparam name="T">TBD</typeparam>
-        /// <param name="obj">TBD</param>
-        /// <param name="elseValue">TBD</param>
-        /// <returns>TBD</returns>
-        public static T GetOrElse<T>(this T obj, T elseValue)
-        {
-            if (obj.Equals(default(T)))
-                return elseValue;
-            return obj;
         }
 
         /// <summary>
@@ -169,7 +156,7 @@ namespace Akka.Util.Internal
         /// <param name="this">TBD</param>
         /// <param name="other">TBD</param>
         /// <returns>TBD</returns>
-        public static TimeSpan Max(this TimeSpan @this, TimeSpan other) 
+        public static TimeSpan Max(this TimeSpan @this, TimeSpan other)
         {
             return @this > other ? @this : other;
         }

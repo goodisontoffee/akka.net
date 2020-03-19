@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="LeaderElectionSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -38,7 +38,7 @@ namespace Akka.Cluster.Tests.MultiNode
     public class LeaderElectionWithFailureDetectorPuppetMultiJvmNode : LeaderElectionSpec
     {
         public LeaderElectionWithFailureDetectorPuppetMultiJvmNode()
-            : base(true)
+            : base(true, typeof(LeaderElectionWithFailureDetectorPuppetMultiJvmNode))
         {
         }
     }
@@ -46,7 +46,7 @@ namespace Akka.Cluster.Tests.MultiNode
     public class LeaderElectionWithAccrualFailureDetectorMultiJvmNode : LeaderElectionSpec
     {
         public LeaderElectionWithAccrualFailureDetectorMultiJvmNode()
-            : base(false)
+            : base(false, typeof(LeaderElectionWithAccrualFailureDetectorMultiJvmNode))
         {
         }
     }
@@ -57,14 +57,14 @@ namespace Akka.Cluster.Tests.MultiNode
 
         private readonly ImmutableList<RoleName> _sortedRoles;
 
-        protected LeaderElectionSpec(bool failureDetectorPuppet)
-            : this(new LeaderElectionSpecConfig(failureDetectorPuppet))
+        protected LeaderElectionSpec(bool failureDetectorPuppet, Type type)
+            : this(new LeaderElectionSpecConfig(failureDetectorPuppet), type)
         {
 
         }
 
-        protected LeaderElectionSpec(LeaderElectionSpecConfig config)
-            : base(config)
+        protected LeaderElectionSpec(LeaderElectionSpecConfig config, Type type)
+            : base(config, type)
         {
             _config = config;
             _sortedRoles = ImmutableList.Create(

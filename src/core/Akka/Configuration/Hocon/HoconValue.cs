@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="HoconValue.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2018 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2018 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -20,6 +20,9 @@ namespace Akka.Configuration.Hocon
     /// </summary>
     public class HoconValue : IMightBeAHoconObject
     {
+        private static readonly Regex EscapeRegex = new Regex("[ \t:]{1}", RegexOptions.Compiled);
+        private static readonly Regex TimeSpanRegex = new Regex(@"^(?<value>([0-9]+(\.[0-9]+)?))\s*(?<unit>(nanoseconds|nanosecond|nanos|nano|ns|microseconds|microsecond|micros|micro|us|milliseconds|millisecond|millis|milli|ms|seconds|second|s|minutes|minute|m|hours|hour|h|days|day|d))$", RegexOptions.Compiled);
+
         /// <summary>
         /// Initializes a new instance of the <see cref="HoconValue"/> class.
         /// </summary>
@@ -146,7 +149,7 @@ namespace Akka.Configuration.Hocon
         /// </returns>
         public bool IsString()
         {
-            return Values.Any() && Values.All(v => v.IsString());
+            return Values.Count > 0 && Values.All(v => v.IsString());
         }
 
         private string ConcatString()
@@ -192,7 +195,6 @@ namespace Akka.Configuration.Hocon
                     return false;
                 default:
                     throw new NotSupportedException($"Unknown boolean format: {v}");
-
             }
         }
 
@@ -372,7 +374,7 @@ namespace Akka.Configuration.Hocon
         {
             string res = GetString();
 
-            var match = Regex.Match(res, @"^(?<value>([0-9]+(\.[0-9]+)?))\s*(?<unit>(nanoseconds|nanosecond|nanos|nano|ns|microseconds|microsecond|micros|micro|us|milliseconds|millisecond|millis|milli|ms|seconds|second|s|minutes|minute|m|hours|hour|h|days|day|d))$");
+            var match = TimeSpanRegex.Match(res);
             if (match.Success) 
             {
                 var u = match.Groups["unit"].Value;
@@ -385,14 +387,12 @@ namespace Akka.Configuration.Hocon
                     case "nanos":
                     case "nano":
                     case "ns":
-                        //TODO: add support for nanoseconds
-                        throw new NotImplementedException();
+                        return TimeSpan.FromTicks((long) Math.Round(TimeSpan.TicksPerMillisecond * v / 1000000.0));
                     case "microseconds":
                     case "microsecond":
                     case "micros":
                     case "micro":
-                        //TODO: add support for microseconds
-                        throw new NotImplementedException();
+                        return TimeSpan.FromTicks((long) Math.Round(TimeSpan.TicksPerMillisecond * v / 1000.0));
                     case "milliseconds":
                     case "millisecond":
                     case "millis":
@@ -434,20 +434,63 @@ namespace Akka.Configuration.Hocon
             return value;
         }
 
+        private struct ByteSize
+        {
+            public long Factor { get; set; }
+            public string[] Suffixes { get; set; }
+        }
+
+        private static ByteSize[] ByteSizes { get; } =
+            new ByteSize[]
+            {
+                new ByteSize { Factor = 1024L * 1024L * 1024L * 1024L * 1024 * 1024L, Suffixes = new string[] { "E", "e", "Ei", "EiB", "exbibyte", "exbibytes" } },
+                new ByteSize { Factor = 1000L * 1000L * 1000L * 1000L * 1000L * 1000L, Suffixes = new string[] { "EB", "exabyte", "exabytes" } },
+                new ByteSize { Factor = 1024L * 1024L * 1024L * 1024L * 1024L, Suffixes = new string[] { "P", "p", "Pi", "PiB", "pebibyte", "pebibytes" } },
+                new ByteSize { Factor = 1000L * 1000L * 1000L * 1000L * 1000L, Suffixes = new string[] { "PB", "petabyte", "petabytes" } },
+                new ByteSize { Factor = 1024L * 1024L * 1024L * 1024L, Suffixes = new string[] { "T", "t", "Ti", "TiB", "tebibyte", "tebibytes" } },
+                new ByteSize { Factor = 1000L * 1000L * 1000L * 1000L, Suffixes = new string[] { "TB", "terabyte", "terabytes" } },
+                new ByteSize { Factor = 1024L * 1024L * 1024L, Suffixes = new string[] { "G", "g", "Gi", "GiB", "gibibyte", "gibibytes" } },
+                new ByteSize { Factor = 1000L * 1000L * 1000L, Suffixes = new string[] { "GB", "gigabyte", "gigabytes" } },
+                new ByteSize { Factor = 1024L * 1024L, Suffixes = new string[] { "M", "m", "Mi", "MiB", "mebibyte", "mebibytes" } },
+                new ByteSize { Factor = 1000L * 1000L, Suffixes = new string[] { "MB", "megabyte", "megabytes" } },
+                new ByteSize { Factor = 1024L, Suffixes = new string[] { "K", "k", "Ki", "KiB", "kibibyte", "kibibytes" } },
+                new ByteSize { Factor = 1000L, Suffixes = new string[] { "kB", "kilobyte", "kilobytes" } },
+                new ByteSize { Factor = 1, Suffixes = new string[] { "b", "B", "byte", "bytes" } }
+            };
+
+        private static char[] Digits { get; } = "0123456789".ToCharArray();
+
         /// <summary>
-        /// Retrieves the long value, optionally suffixed with a 'b', from this <see cref="HoconValue"/>.
+        /// Retrieves the long value, optionally suffixed with a case sensitive
+        /// <see href="https://github.com/lightbend/config/blob/master/HOCON.md#size-in-bytes-format">byte size suffix</see>, from
+        /// this <see cref="HoconValue"/>. An empty value results in <see langword="null"/>.
         /// </summary>
         /// <returns>The long value represented by this <see cref="HoconValue"/>.</returns>
         public long? GetByteSize()
         {
             var res = GetString();
-            if (res.EndsWith("b"))
+            if (string.IsNullOrEmpty(res))
+                return null;
+            res = res.Trim();
+            var index = res.LastIndexOfAny(Digits);
+            if (index == -1 || index + 1 >= res.Length)
+                return long.Parse(res);
+
+            var value = res.Substring(0, index + 1);
+            var unit = res.Substring(index + 1).Trim();
+
+            for (var byteSizeIndex = 0; byteSizeIndex < ByteSizes.Length; byteSizeIndex++)
             {
-                var v = res.Substring(0, res.Length - 1);
-                return long.Parse(v);
+                var byteSize = ByteSizes[byteSizeIndex];
+                for (var suffixIndex = 0; suffixIndex < byteSize.Suffixes.Length; suffixIndex++)
+                {
+                    var suffix = byteSize.Suffixes[suffixIndex];
+                    if (string.Equals(unit, suffix, StringComparison.Ordinal))
+                        return byteSize.Factor * long.Parse(value);
+                }
             }
 
-            return long.Parse(res);
+            throw new FormatException($"{unit} is not a valid byte size suffix");
         }
 
         /// <summary>
@@ -473,8 +516,15 @@ namespace Akka.Configuration.Hocon
             }
             if (IsObject())
             {
-                var i = new string(' ', indent*2);
-                return string.Format("{{\r\n{1}{0}}}", i, GetObject().ToString(indent + 1));
+                if (indent == 0)
+                {
+                    return GetObject().ToString(indent + 1);
+                }
+                else
+                {
+                    var i = new string(' ', indent * 2);
+                    return string.Format("{{\r\n{1}{0}}}", i, GetObject().ToString(indent + 1));
+                }
             }
             if (IsArray())
             {
@@ -485,11 +535,13 @@ namespace Akka.Configuration.Hocon
 
         private string QuoteIfNeeded(string text)
         {
-            if(text == null) return "";
-            if(text.ToCharArray().Intersect(" \t".ToCharArray()).Any())
+            if (text == null) return "";
+
+            if (EscapeRegex.IsMatch(text))
             {
                 return "\"" + text + "\"";
             }
+
             return text;
         }
     }

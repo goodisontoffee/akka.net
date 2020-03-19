@@ -1,10 +1,11 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterShardingMessageSerializerSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
+using System;
 using System.Collections.Immutable;
 using Akka.Actor;
 using Akka.Cluster.Sharding.Serialization;
@@ -58,7 +59,7 @@ namespace Akka.Cluster.Sharding.Tests
                 .CreateBuilder<string, IActorRef>()
                 .AddAndReturn("a", region1)
                 .AddAndReturn("b", region2)
-                .AddAndReturn("c", region3)
+                .AddAndReturn("c", region2)
                 .ToImmutableDictionary();
 
             var regions = ImmutableDictionary
@@ -69,10 +70,10 @@ namespace Akka.Cluster.Sharding.Tests
                 .ToImmutableDictionary();
 
             var state = new PersistentShardCoordinator.State(
-                shards,
-                regions,
-                ImmutableHashSet.Create(regionProxy1, regionProxy2),
-                ImmutableHashSet.Create("d"));
+                shards: shards,
+                regions: regions,
+                regionProxies: ImmutableHashSet.Create(regionProxy1, regionProxy2),
+                unallocatedShards: ImmutableHashSet.Create("d"));
 
             CheckSerialization(state);
         }
@@ -122,12 +123,29 @@ namespace Akka.Cluster.Sharding.Tests
         public void ClusterShardingMessageSerializer_must_be_able_to_serializable_GetShardStats()
         {
             CheckSerialization(Shard.GetShardStats.Instance);
+            CheckSerialization(GetShardRegionStats.Instance);
         }
 
         [Fact]
         public void ClusterShardingMessageSerializer_must_be_able_to_serializable_ShardStats()
         {
             CheckSerialization(new Shard.ShardStats("a", 23));
+            CheckSerialization(new ShardRegionStats(ImmutableDictionary<string, int>.Empty.Add("f", 12)));
+        }
+
+        [Fact]
+        public void ClusterShardingMessageSerializer_must_be_able_to_serialize_StartEntity()
+        {
+            CheckSerialization(new ShardRegion.StartEntity("42"));
+            CheckSerialization(new ShardRegion.StartEntityAck("13", "37"));
+        }
+
+        [Fact]
+        public void ClusterShardingMessageSerializer_must_serialize_ClusterShardingStats()
+        {
+            CheckSerialization(new GetClusterShardingStats(TimeSpan.FromMilliseconds(500)));
+            CheckSerialization(new ClusterShardingStats(ImmutableDictionary<Address, ShardRegionStats>.Empty.Add(new Address("akka.tcp", "foo", "localhost", 9110), 
+                new ShardRegionStats(ImmutableDictionary<string, int>.Empty.Add("f", 12)))));
         }
     }
 }

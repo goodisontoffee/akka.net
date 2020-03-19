@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Replicator.Messages.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -65,7 +65,7 @@ namespace Akka.DistributedData
 
     /// <summary>
     /// Send this message to the local <see cref="Replicator"/> to retrieve a data value for the
-    /// given `key`. The `Replicator` will reply with one of the <see cref="GetResponse"/> messages.
+    /// given `key`. The `Replicator` will reply with one of the <see cref="IGetResponse"/> messages.
     /// 
     /// The optional `request` context is included in the reply messages. This is a convenient
     /// way to pass contextual information (e.g. original sender) without having to use `ask`
@@ -317,9 +317,9 @@ namespace Akka.DistributedData
     }
 
     /// <summary>
-    /// Register a subscriber that will be notified with a <see cref="Changed{T}"/> message
+    /// Register a subscriber that will be notified with a <see cref="Changed"/> message
     /// when the value of the given <see cref="Key"/> is changed. Current value is also
-    /// sent as a <see cref="Changed{T}"/> message to a new subscriber.
+    /// sent as a <see cref="Changed"/> message to a new subscriber.
     /// 
     /// Subscribers will be notified periodically with the configured `notify-subscribers-interval`,
     /// and it is also possible to send an explicit `FlushChanges` message to
@@ -327,7 +327,7 @@ namespace Akka.DistributedData
     /// 
     /// The subscriber will automatically be unregistered if it is terminated.
     /// 
-    /// If the key is deleted the subscriber is notified with a <see cref="DataDeleted{T}"/> message.
+    /// If the key is deleted the subscriber is notified with a <see cref="DataDeleted"/> message.
     /// </summary>
     [Serializable]
     public sealed class Subscribe : IReplicatorMessage, IEquatable<Subscribe>
@@ -370,7 +370,7 @@ namespace Akka.DistributedData
     /// <summary>
     /// Unregister a subscriber.
     /// </summary>
-    /// <seealso cref="Subscribe{T}"/>
+    /// <seealso cref="Subscribe"/>
     [Serializable]
     public sealed class Unsubscribe : IEquatable<Unsubscribe>, IReplicatorMessage
     {
@@ -441,7 +441,7 @@ namespace Akka.DistributedData
             return Equals(Key, other.Key) && Equals(Data, other.Data);
         }
 
-        public T Get<T>(IKey<T> key)
+        public T Get<T>(IKey<T> key) where T : IReplicatedData
         {
             if (!Equals(Key, key)) throw new ArgumentException("Wrong key used, must be contained key");
             return (T)Data;
@@ -466,7 +466,7 @@ namespace Akka.DistributedData
     /// <summary>
     /// Send this message to the local <see cref="Replicator"/> to update a data value for the
     /// given <see cref="Key"/>. The <see cref="Replicator"/> will reply with one of the 
-    /// <see cref="IUpdateResponse{T}"/> messages.
+    /// <see cref="IUpdateResponse"/> messages.
     /// 
     /// The current data value for the <see cref="Key"/> is passed as parameter to the <see cref="Modify"/> function.
     /// It is <see langword="null"/> if there is no value for the <see cref="Key"/>, and otherwise <see cref="Request"/>. The function
@@ -753,7 +753,7 @@ namespace Akka.DistributedData
 
     /// <summary>
     /// Send this message to the local <see cref="Replicator"/> to delete a data value for the
-    /// given <see cref="Key"/>. The <see cref="Replicator"/> will reply with one of the <see cref="IDeleteResponse{T}"/> messages.
+    /// given <see cref="Key"/>. The <see cref="Replicator"/> will reply with one of the <see cref="IDeleteResponse"/> messages.
     /// </summary>
     [Serializable]
     public sealed class Delete : ICommand, INoSerializationVerificationNeeded, IEquatable<Delete>
@@ -796,11 +796,20 @@ namespace Akka.DistributedData
 
     /// <summary>
     /// A response for a possible <see cref="Delete"/> request message. It can be one of 3 possible cases:
-    /// <ul>
-    /// <li><see cref="DeleteSuccess"/> when data was deleted successfully.</li>
-    /// <li><see cref="ReplicationDeletedFailure"/> when delete operation ended with failure.</li>
-    /// <li><see cref="DataDeleted"/> when an operation attempted to delete already deleted data.</li>
-    /// </ul>
+    /// <list type="bullet">
+    ///     <item>
+    ///         <term><see cref="DeleteSuccess"/></term>
+    ///         <description>Returned when data was deleted successfully.</description>
+    ///     </item>
+    ///     <item>
+    ///         <term><see cref="ReplicationDeleteFailure"/></term>
+    ///         <description>Returned when delete operation ended with failure.</description>
+    ///     </item>
+    ///     <item>
+    ///         <term><see cref="DataDeleted"/></term>
+    ///         <description>Returned when an operation attempted to delete already deleted data.</description>
+    ///     </item>
+    /// </list>
     /// </summary>
     public interface IDeleteResponse : INoSerializationVerificationNeeded
     {
@@ -854,11 +863,11 @@ namespace Akka.DistributedData
     }
 
     [Serializable]
-    public sealed class ReplicationDeletedFailure : IDeleteResponse, IEquatable<ReplicationDeletedFailure>
+    public sealed class ReplicationDeleteFailure : IDeleteResponse, IEquatable<ReplicationDeleteFailure>
     {
         public IKey Key { get; }
 
-        public ReplicationDeletedFailure(IKey key)
+        public ReplicationDeleteFailure(IKey key)
         {
             Key = key;
         }
@@ -866,7 +875,7 @@ namespace Akka.DistributedData
         public bool AlreadyDeleted => false;
 
         /// <inheritdoc/>
-        public bool Equals(ReplicationDeletedFailure other)
+        public bool Equals(ReplicationDeleteFailure other)
         {
             if (ReferenceEquals(other, null)) return false;
             if (ReferenceEquals(this, other)) return true;
@@ -875,7 +884,7 @@ namespace Akka.DistributedData
         }
 
         /// <inheritdoc/>
-        public override bool Equals(object obj) => obj is ReplicationDeletedFailure && Equals((ReplicationDeletedFailure)obj);
+        public override bool Equals(object obj) => obj is ReplicationDeleteFailure && Equals((ReplicationDeleteFailure)obj);
 
         /// <inheritdoc/>
         public override int GetHashCode() => Key.GetHashCode();
@@ -995,15 +1004,6 @@ namespace Akka.DistributedData
         /// </summary>
         /// <param name="message">The message that describes the error.</param>
         public DataDeletedException(string message) : base(message)
-        {
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="DataDeletedException"/> class.
-        /// </summary>
-        /// <param name="info">The <see cref="SerializationInfo" /> that holds the serialized object data about the exception being thrown.</param>
-        /// <param name="context">The <see cref="StreamingContext" /> that contains contextual information about the source or destination.</param>
-        protected DataDeletedException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
     }

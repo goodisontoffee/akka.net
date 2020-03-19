@@ -1,21 +1,23 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="InternalFlowOperations.cs" company="Akka.NET Project">
-//     Copyright (C) 2015-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Threading.Tasks;
+using Akka.Actor;
 using Akka.Event;
 using Akka.IO;
 using Akka.Streams.Implementation;
 using Akka.Streams.Implementation.Stages;
 using Akka.Streams.Stage;
-using Akka.Streams.Supervision;
 using Akka.Streams.Util;
+using Akka.Util;
 
 namespace Akka.Streams.Dsl.Internal
 {
@@ -52,6 +54,8 @@ namespace Akka.Streams.Dsl.Internal
         /// Recover allows to send last element on failure and gracefully complete the stream
         /// Since the underlying failure signal onError arrives out-of-band, it might jump over existing elements.
         /// This stage can recover the failure signal, but not the skipped elements, which will be dropped.
+        /// <para/>
+        /// Throwing an exception inside Recover will be logged on ERROR level automatically.
         /// <para>
         /// Emits when element is available from the upstream or upstream is failed and <paramref name="partialFunc"/> returns an element
         /// </para>
@@ -82,6 +86,7 @@ namespace Akka.Streams.Dsl.Internal
         /// Since the underlying failure signal onError arrives out-of-band, it might jump over existing elements.
         /// This stage can recover the failure signal, but not the skipped elements, which will be dropped.
         /// </para>
+        /// Throwing an exception inside RecoverWith will be logged on ERROR level automatically.
         /// <para>
         /// Emits when element is available from the upstream or upstream is failed and element is available from alternative Source
         /// </para>
@@ -113,6 +118,7 @@ namespace Akka.Streams.Dsl.Internal
         /// Since the underlying failure signal onError arrives out-of-band, it might jump over existing elements.
         /// This stage can recover the failure signal, but not the skipped elements, which will be dropped.
         /// </para>
+        /// Throwing an exception inside RecoverWithRetries will be logged on ERROR level automatically.
         /// <para>
         /// Emits when element is available from the upstream or upstream is failed and element is available from alternative Source
         /// </para>
@@ -135,6 +141,33 @@ namespace Akka.Streams.Dsl.Internal
             Func<Exception, IGraph<SourceShape<TOut>, TMat>> partialFunc, int attempts)
         {
             return flow.Via(new Fusing.RecoverWith<TOut, TMat>(partialFunc, attempts));
+        }
+
+        /// <summary>
+        /// While similar to <see cref="Recover{TOut,TMat}"/> this stage can be used to transform an error signal to a different one without logging
+        /// it as an error in the process. So in that sense it is NOT exactly equivalent to Recover(e => throw e2) since Recover
+        /// would log the e2 error. 
+        /// <para>
+        /// Since the underlying failure signal onError arrives out-of-band, it might jump over existing elements.
+        /// This stage can recover the failure signal, but not the skipped elements, which will be dropped.
+        /// </para>
+        /// Similarily to <see cref="Recover{TOut,TMat}"/> throwing an exception inside SelectError will be logged.
+        /// <para>
+        /// Emits when element is available from the upstream or upstream is failed and <paramref name="selector"/> returns an element
+        /// </para>
+        /// <para>
+        /// Backpressures when downstream backpressures
+        /// </para>
+        /// <para>
+        /// Completes when upstream completes or upstream failed with exception returned by the <paramref name="selector"/>
+        /// </para>
+        /// Cancels when downstream cancels 
+        /// </summary>
+        /// <param name="flow">TBD</param>
+        /// <param name="selector">Receives the failure cause and returns the new cause, return the original exception if no other should be applied</param>
+        public static IFlow<TOut, TMat> SelectError<TOut, TMat>(this IFlow<TOut, TMat> flow, Func<Exception, Exception> selector)
+        {
+            return flow.Via(new Fusing.SelectError<TOut>(selector));
         }
 
         /// <summary>
@@ -242,12 +275,12 @@ namespace Akka.Streams.Dsl.Internal
         /// are emitted downstream are in the same order as received from upstream.
         /// 
         /// If the group by function <paramref name="asyncMapper"/> throws an exception or if the <see cref="Task"/> is completed
-        /// with failure and the supervision decision is <see cref="Directive.Stop"/>
+        /// with failure and the supervision decision is <see cref="Supervision.Directive.Stop"/>
         /// the stream will be completed with failure.
         /// 
         /// If the group by function <paramref name="asyncMapper"/> throws an exception or if the <see cref="Task"/> is completed
-        /// with failure and the supervision decision is <see cref="Directive.Resume"/> or
-        /// <see cref="Directive.Restart"/> the element is dropped and the stream continues.
+        /// with failure and the supervision decision is <see cref="Supervision.Directive.Resume"/> or
+        /// <see cref="Supervision.Directive.Restart"/> the element is dropped and the stream continues.
         /// <para>
         /// Emits when the task returned by the provided function finishes for the next element in sequence
         /// </para>
@@ -285,12 +318,12 @@ namespace Akka.Streams.Dsl.Internal
         /// in the same order as received from upstream.
         /// 
         /// If the group by function <paramref name="asyncMapper"/> throws an exception or if the <see cref="Task"/> is completed
-        /// with failure and the supervision decision is <see cref="Directive.Stop"/>
+        /// with failure and the supervision decision is <see cref="Supervision.Directive.Stop"/>
         /// the stream will be completed with failure.
         /// 
         /// If the group by function <paramref name="asyncMapper"/> throws an exception or if the<see cref="Task"/> is completed
-        /// with failure and the supervision decision is <see cref="Directive.Resume"/> or
-        /// <see cref="Directive.Restart"/> the element is dropped and the stream continues.
+        /// with failure and the supervision decision is <see cref="Supervision.Directive.Resume"/> or
+        /// <see cref="Supervision.Directive.Restart"/> the element is dropped and the stream continues.
         /// <para>
         /// Emits when any of the tasks returned by the provided function complete
         /// </para>
@@ -366,29 +399,36 @@ namespace Akka.Streams.Dsl.Internal
 
         /// <summary>
         /// Terminate processing (and cancel the upstream publisher) after <paramref name="predicate"/>
-        /// returns false for the first time. Due to input buffering some elements may have been
-        /// requested from upstream publishers that will then not be processed downstream
-        /// of this step.
+        /// returns false for the first time, including the first failed element iff inclusive is true
+        /// Due to input buffering some elements may have been requested from upstream publishers
+        /// that will then not be processed downstream of this step.
         /// 
         /// The stream will be completed without producing any elements if <paramref name="predicate"/> is false for
         /// the first stream element.
         /// <para>
         /// Emits when the <paramref name="predicate"/> is true
         /// </para>
-        /// Backpressures when downstream backpressures
         /// <para>
-        /// Completes when <paramref name="predicate"/> returned false or upstream completes
+        /// Backpressures when downstream backpressures
         /// </para>
+        /// <para>
+        /// Completes when <paramref name="predicate"/> returned false (or 1 after predicate returns false if <paramref name="inclusive"/>) or upstream completes
+        /// </para>
+        /// <para>
         /// Cancels when <paramref name="predicate"/> returned false or downstream cancels
+        /// </para>
+        /// <seealso cref="Limit{T, TMat}(IFlow{T, TMat}, long)"/>
+        /// <seealso cref="LimitWeighted{T, TMat}(IFlow{T, TMat}, long, Func{T, long})"/>
         /// </summary>
         /// <typeparam name="T">TBD</typeparam>
         /// <typeparam name="TMat">TBD</typeparam>
         /// <param name="flow">TBD</param>
         /// <param name="predicate">TBD</param>
+        /// <param name="inclusive">TBD</param>
         /// <returns>TBD</returns>
-        public static IFlow<T, TMat> TakeWhile<T, TMat>(this IFlow<T, TMat> flow, Predicate<T> predicate)
+        public static IFlow<T, TMat> TakeWhile<T, TMat>(this IFlow<T, TMat> flow, Predicate<T> predicate, bool inclusive)
         {
-            return flow.Via(new Fusing.TakeWhile<T>(predicate));
+            return flow.Via(new Fusing.TakeWhile<T>(predicate, inclusive));
         }
 
         /// <summary>
@@ -563,7 +603,7 @@ namespace Akka.Streams.Dsl.Internal
         /// emitting the next current value.
         /// 
         /// If the function <paramref name="scan"/> throws an exception and the supervision decision is
-        /// <see cref="Directive.Restart"/> current value starts at <paramref name="zero"/> again
+        /// <see cref="Supervision.Directive.Restart"/> current value starts at <paramref name="zero"/> again
         /// the stream will continue.
         /// <para>
         /// Emits when the function scanning the element returns a new element
@@ -588,12 +628,47 @@ namespace Akka.Streams.Dsl.Internal
         }
 
         /// <summary>
+        /// Similar to <see cref="Scan{TIn,TOut,TMat}"/> but with a asynchronous function,
+        /// emits its current value which starts at <paramref name="zero"/> and then
+        /// applies the current and next value to the given function <paramref name="scan"/>
+        /// emitting a <see cref="Task{TOut}"/> that resolves to the next current value.
+        /// 
+        /// If the function <paramref name="scan"/> throws an exception and the supervision decision is
+        /// <see cref="Supervision.Directive.Restart"/> current value starts at <paramref name="zero"/> again
+        /// the stream will continue.
+        /// 
+        /// If the function <paramref name="scan"/> throws an exception and the supervision decision is
+        /// <see cref="Supervision.Directive.Resume"/> current value starts at the previous
+        /// current value, or zero when it doesn't have one, and the stream will continue.
+        /// <para>
+        /// Emits the <see cref="Task{TOut}"/> returned by <paramref name="scan"/> completes
+        /// </para>
+        /// Backpressures when downstream backpressures
+        /// <para>
+        /// Completes upstream completes and the last task returned by <paramref name="scan"/> completes
+        /// </para>
+        /// Cancels when downstream cancels
+        /// </summary>
+        /// <typeparam name="TIn">TBD</typeparam>
+        /// <typeparam name="TOut">TBD</typeparam>
+        /// <typeparam name="TMat">TBD</typeparam>
+        /// <param name="flow">TBD</param>
+        /// <param name="zero">TBD</param>
+        /// <param name="scan">TBD</param>
+        /// <returns>TBD</returns>
+        public static IFlow<TOut, TMat> ScanAsync<TIn, TOut, TMat>(this IFlow<TIn, TMat> flow, TOut zero,
+            Func<TOut, TIn, Task<TOut>> scan)
+        {
+            return flow.Via(new Fusing.ScanAsync<TIn, TOut>(zero, scan));
+        }
+
+        /// <summary>
         /// Similar to <see cref="Scan{TIn,TOut,TMat}"/> but only emits its result when the upstream completes,
         /// after which it also completes. Applies the given function <paramref name="fold"/> towards its current and next value,
         /// yielding the next current value.
         /// 
         /// If the function <paramref name="fold"/> throws an exception and the supervision decision is
-        /// <see cref="Directive.Restart"/> current value starts at <paramref name="zero"/> again
+        /// <see cref="Supervision.Directive.Restart"/> current value starts at <paramref name="zero"/> again
         /// the stream will continue.
         /// <para>
         /// Emits when upstream completes
@@ -623,7 +698,7 @@ namespace Akka.Streams.Dsl.Internal
         /// yielding the next current value.
         /// 
         /// If the function <paramref name="fold"/> returns a failure and the supervision decision is
-        /// <see cref="Directive.Restart"/> current value starts at <paramref name="zero"/> again
+        /// <see cref="Supervision.Directive.Restart"/> current value starts at <paramref name="zero"/> again
         /// the stream will continue.
         /// <para>
         /// Emits when upstream completes
@@ -820,7 +895,7 @@ namespace Akka.Streams.Dsl.Internal
         /// <returns>TBD</returns>
         public static IFlow<T, TMat> Skip<T, TMat>(this IFlow<T, TMat> flow, long n)
         {
-            return flow.Via(new Fusing.Drop<T>(n));
+            return flow.Via(new Fusing.Skip<T>(n));
         }
 
         /// <summary>
@@ -1038,7 +1113,7 @@ namespace Akka.Streams.Dsl.Internal
         /// This means that if the upstream is actually faster than the upstream it will be backpressured by the downstream
         /// subscriber.
         /// 
-        /// Expand does not support <see cref="Directive.Restart"/> and <see cref="Directive.Resume"/>.
+        /// Expand does not support <see cref="Supervision.Directive.Restart"/> and <see cref="Supervision.Directive.Resume"/>.
         /// Exceptions from the <paramref name="extrapolate"/> function will complete the stream with failure.
         /// <para>
         /// Emits when downstream stops backpressuring
@@ -1085,7 +1160,7 @@ namespace Akka.Streams.Dsl.Internal
         /// <returns>TBD</returns>
         public static IFlow<T, TMat> Buffer<T, TMat>(this IFlow<T, TMat> flow, int size, OverflowStrategy strategy)
         {
-            return flow.AndThen(new Buffer<T>(size, strategy));
+            return flow.Via(new Fusing.Buffer<T>(size, strategy));
         }
 
         /// <summary>
@@ -1124,7 +1199,7 @@ namespace Akka.Streams.Dsl.Internal
         /// <param name="flow">TBD</param>
         /// <param name="n">TBD</param>
         /// <returns>TBD</returns>
-        public static IFlow<Tuple<IImmutableList<T>, Source<T, NotUsed>>, TMat> PrefixAndTail<T, TMat>(
+        public static IFlow<(IImmutableList<T>, Source<T, NotUsed>), TMat> PrefixAndTail<T, TMat>(
             this IFlow<T, TMat> flow, int n)
         {
             return flow.Via(new Fusing.PrefixAndTail<T>(n));
@@ -1142,11 +1217,11 @@ namespace Akka.Streams.Dsl.Internal
         /// to consume only one of them.
         /// 
         /// If the group by function <paramref name="groupingFunc"/> throws an exception and the supervision decision
-        /// is <see cref="Directive.Stop"/> the stream and substreams will be completed
+        /// is <see cref="Supervision.Directive.Stop"/> the stream and substreams will be completed
         /// with failure.
         /// 
         /// If the group by <paramref name="groupingFunc"/> throws an exception and the supervision decision
-        /// is <see cref="Directive.Resume"/> or <see cref="Directive.Restart"/>
+        /// is <see cref="Supervision.Directive.Resume"/> or <see cref="Supervision.Directive.Restart"/>
         /// the element is dropped and the stream and substreams continue.
         /// 
         /// Function <paramref name="groupingFunc"/>  MUST NOT return null. This will throw exception and trigger supervision decision mechanism.
@@ -1264,11 +1339,11 @@ namespace Akka.Streams.Dsl.Internal
         /// explicit buffers are filled.
         /// 
         /// If the split <paramref name="predicate"/> throws an exception and the supervision decision
-        /// is <see cref="Directive.Stop"/> the stream and substreams will be completed
+        /// is <see cref="Supervision.Directive.Stop"/> the stream and substreams will be completed
         /// with failure.
         /// 
         /// If the split <paramref name="predicate"/> throws an exception and the supervision decision
-        /// is <see cref="Directive.Resume"/> or <see cref="Directive.Restart"/>
+        /// is <see cref="Supervision.Directive.Resume"/> or <see cref="Supervision.Directive.Restart"/>
         /// the element is dropped and the stream and substreams continue.
         /// <para>
         /// Emits when an element for which the provided predicate is true, opening and emitting
@@ -1369,11 +1444,11 @@ namespace Akka.Streams.Dsl.Internal
         /// explicit buffers are filled.
         ///
         /// If the split <paramref name="predicate"/> throws an exception and the supervision decision
-        /// is <see cref="Directive.Stop"/> the stream and substreams will be completed
+        /// is <see cref="Supervision.Directive.Stop"/> the stream and substreams will be completed
         /// with failure.
         ///
         /// If the split <paramref name="predicate"/> throws an exception and the supervision decision
-        /// is <see cref="Directive.Resume"/> or <see cref="Directive.Restart"/>
+        /// is <see cref="Supervision.Directive.Resume"/> or <see cref="Supervision.Directive.Restart"/>
         /// the element is dropped and the stream and substreams continue.
         /// <para>
         /// Emits when an element passes through.When the provided predicate is true it emitts the element
@@ -1816,20 +1891,20 @@ namespace Akka.Streams.Dsl.Internal
         /// <param name="flow">TBD</param>
         /// <param name="other">TBD</param>
         /// <returns>TBD</returns>
-        public static IFlow<Tuple<T1, T2>, TMat> Zip<T1, T2, TMat>(this IFlow<T1, TMat> flow,
+        public static IFlow<(T1, T2), TMat> Zip<T1, T2, TMat>(this IFlow<T1, TMat> flow,
             IGraph<SourceShape<T2>, TMat> other)
         {
             return flow.Via(ZipGraph<T1, T2, TMat>(other));
         }
 
-        private static IGraph<FlowShape<T1, Tuple<T1, T2>>, TMat> ZipGraph<T1, T2, TMat>(
+        private static IGraph<FlowShape<T1, (T1, T2)>, TMat> ZipGraph<T1, T2, TMat>(
             IGraph<SourceShape<T2>, TMat> other)
         {
             return GraphDsl.Create(other, (builder, shape) =>
             {
                 var zip = builder.Add(new Zip<T1, T2>());
                 builder.From(shape).To(zip.In1);
-                return new FlowShape<T1, Tuple<T1, T2>>(zip.In0, zip.Out);
+                return new FlowShape<T1, (T1, T2)>(zip.In0, zip.Out);
             });
         }
 
@@ -1868,6 +1943,28 @@ namespace Akka.Streams.Dsl.Internal
                 var r = builder.From(shape);
                 r.To(zip.In1);
                 return new FlowShape<T1, T3>(zip.In0, zip.Out);
+            });
+        }
+
+        /// <summary>
+        /// Combine the elements of current flow into a stream of tuples consisting
+        /// of all elements paired with their index. Indices start at 0.
+        /// 
+        /// <para/>
+        /// Emits when upstream emits an element and is paired with their index
+        /// <para/>
+        /// Backpressures when downstream backpressures
+        /// <para/>
+        /// Completes when upstream completes
+        /// <para/>
+        /// Cancels when downstream cancels
+        /// </summary>
+        public static IFlow<(T1, long), TMat> ZipWithIndex<T1, TMat>(this IFlow<T1, TMat> flow)
+        {
+            return flow.StatefulSelectMany<T1, (T1, long), TMat>(() =>
+            {
+                var index = 0L;
+                return element => new[] {(element, index++)};
             });
         }
 
@@ -2348,6 +2445,17 @@ namespace Akka.Streams.Dsl.Internal
         {
             return flow.ViaMaterialized(new Fusing.MonitorFlow<T>(), combine);
         }
+
+        /// <summary>
+        /// The operator fails with an <see cref="WatchedActorTerminatedException"/> if the target actor is terminated.
+        /// 
+        /// '''Emits when''' upstream emits 
+        /// '''Backpressures when''' downstream backpressures 
+        /// '''Completes when''' upstream completes 
+        /// '''Fails when''' the watched actor terminates 
+        /// '''Cancels when''' downstream cancels
+        /// </summary>
+        public static IFlow<T, TMat> Watch<T, TMat>(this IFlow<T, TMat> flow, IActorRef actorRef) => flow.Via(new Fusing.Watch<T>(actorRef));
 
         //TODO: there is no HKT in .NET, so we cannot simply do `to` method, which evaluates to either Source ⇒ IRunnableGraph, or Flow ⇒ Sink
 

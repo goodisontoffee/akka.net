@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DistributedPubSubMediatorSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -41,6 +41,7 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
                 akka.remote.log-remote-lifecycle-events = off
                 akka.cluster.auto-down-unreachable-after = 0s
                 akka.cluster.pub-sub.max-delta-elements = 500
+                akka.testconductor.query-timeout = 1m # we were having timeouts shutting down nodes with 5s default
             ").WithFallback(DistributedPubSub.DefaultConfig());
         }
     }
@@ -241,7 +242,7 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
         {
         }
 
-        protected DistributedPubSubMediatorSpec(DistributedPubSubMediatorSpecConfig config) : base(config)
+        protected DistributedPubSubMediatorSpec(DistributedPubSubMediatorSpecConfig config) : base(config, typeof(DistributedPubSubMediatorSpec))
         {
             _first = config.First;
             _second = config.Second;
@@ -259,8 +260,7 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
 
         private IActorRef ChatUser(string name)
         {
-            IActorRef a;
-            return _chatUsers.TryGetValue(name, out a) ? a : ActorRefs.Nobody;
+            return _chatUsers.TryGetValue(name, out var a) ? a : ActorRefs.Nobody;
         }
 
         private void Join(RoleName from, RoleName to)
@@ -287,6 +287,15 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
             });
         }
 
+        private void AwaitCountSubscribers(int expected, string topic)
+        {
+            AwaitAssert(() =>
+            {
+                Mediator.Tell(new CountSubscribers(topic));
+                Assert.Equal(expected, ExpectMsg<int>());
+            });
+        }
+
         #endregion
 
         [MultiNodeFact]
@@ -307,6 +316,7 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
             DistributedPubSubMediator_must_remove_entries_when_node_is_removed();
             DistributedPubSubMediator_must_receive_proper_UnsubscribeAck_message();
             DistributedPubSubMediator_must_get_topics_after_simple_publish();
+            DistributedPubSubMediator_must_remove_topic_subscribers_when_they_terminate();
         }
 
         public void DistributedPubSubMediator_must_startup_2_nodes_cluster()
@@ -819,6 +829,24 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
                     });
                 }, _second);
                 EnterBarrier("after-get-topics");
+            });
+        }
+
+        public void DistributedPubSubMediator_must_remove_topic_subscribers_when_they_terminate()
+        {
+            Within(TimeSpan.FromSeconds(15), () =>
+            {
+                RunOn(() =>
+                {
+                    var s1 = new Subscribe("topic_b1", CreateChatUser("u18"));
+                    Mediator.Tell(s1);
+                    ExpectMsg<SubscribeAck>(x => x.Subscribe.Equals(s1));
+
+                    AwaitCountSubscribers(1, "topic_b1");
+                    ChatUser("u18").Tell(PoisonPill.Instance);
+                    AwaitCountSubscribers(0, "topic_b1");
+                }, _first);
+                EnterBarrier("after-15");
             });
         }
     }

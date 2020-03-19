@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="LeaderDowningNodeThatIsUnreachableSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -40,14 +40,14 @@ namespace Akka.Cluster.Tests.MultiNode
 
     public class LeaderDowningNodeThatIsUnreachableWithFailureDetectorPuppetMultiNode : LeaderDowningNodeThatIsUnreachableSpec
     {
-        public LeaderDowningNodeThatIsUnreachableWithFailureDetectorPuppetMultiNode() : base(true)
+        public LeaderDowningNodeThatIsUnreachableWithFailureDetectorPuppetMultiNode() : base(true, typeof(LeaderDowningNodeThatIsUnreachableWithFailureDetectorPuppetMultiNode))
         {
         }
     }
 
     public class LeaderDowningNodeThatIsUnreachableWithAccrualFailureDetectorMultiNode : LeaderDowningNodeThatIsUnreachableSpec
     {
-        public LeaderDowningNodeThatIsUnreachableWithAccrualFailureDetectorMultiNode() : base(false)
+        public LeaderDowningNodeThatIsUnreachableWithAccrualFailureDetectorMultiNode() : base(false, typeof(LeaderDowningNodeThatIsUnreachableWithAccrualFailureDetectorMultiNode))
         {
         }
     }
@@ -56,14 +56,14 @@ namespace Akka.Cluster.Tests.MultiNode
     {
         private readonly LeaderDowningNodeThatIsUnreachableConfig _config;
 
-        protected LeaderDowningNodeThatIsUnreachableSpec(bool failureDetectorPuppet)
-            : this(new LeaderDowningNodeThatIsUnreachableConfig(failureDetectorPuppet))
+        protected LeaderDowningNodeThatIsUnreachableSpec(bool failureDetectorPuppet, Type type)
+            : this(new LeaderDowningNodeThatIsUnreachableConfig(failureDetectorPuppet), type)
         {
 
         }
 
-        protected LeaderDowningNodeThatIsUnreachableSpec(LeaderDowningNodeThatIsUnreachableConfig config)
-            : base(config)
+        protected LeaderDowningNodeThatIsUnreachableSpec(LeaderDowningNodeThatIsUnreachableConfig config, Type type)
+            : base(config, type)
         {
             _config = config;
             MuteMarkingAsUnreachable();

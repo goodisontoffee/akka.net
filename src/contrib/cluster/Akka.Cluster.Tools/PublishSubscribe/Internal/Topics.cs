@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Topics.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -111,6 +111,10 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
                     Context.Parent.Tell(NewSubscriberArrived.Instance);
                 }
             }
+            else if (message is Count)
+            {
+                Sender.Tell(Subscribers.Count);
+            }
             else
             {
                 foreach (var subscriber in Subscribers)
@@ -137,7 +141,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
             return Business(message) || DefaultReceive(message);
         }
 
-        private void Remove(IActorRef actorRef)
+        protected void Remove(IActorRef actorRef)
         {
             Subscribers.Remove(actorRef);
 
@@ -233,6 +237,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
                 var terminated = (Terminated)message;
                 var key = Utils.MakeKey(terminated.ActorRef);
                 _buffer.RecreateAndForwardMessagesIfNeeded(key, () => NewGroupActor(terminated.ActorRef.Path.Name));
+                Remove(terminated.ActorRef);
             }
             else return false;
             return true;
@@ -290,6 +295,8 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
     /// </summary>
     internal static class Utils
     {
+        private static System.Text.RegularExpressions.Regex _pathRegex = new System.Text.RegularExpressions.Regex("^/remote/.+(/user/.+)");
+
         /// <summary>
         /// <para>
         /// Mediator uses <see cref="Router"/> to send messages to multiple destinations, Router in general
@@ -336,7 +343,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// <returns>TBD</returns>
         public static string MakeKey(ActorPath path)
         {
-            return path.ToStringWithoutAddress();
+            return _pathRegex.Replace(path.ToStringWithoutAddress(), "$1");
         }
     }
 }

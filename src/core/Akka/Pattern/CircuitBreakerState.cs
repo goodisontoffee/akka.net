@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CircuitBreakerState.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2016 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2016 Akka.NET project <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -37,7 +37,7 @@ namespace Akka.Pattern
         /// <param name="body">N/A</param>
         /// <exception cref="OpenCircuitException">This exception is thrown automatically since the circuit is open.</exception>
         /// <returns>N/A</returns>
-        public override Task<T> Invoke<T>(Func<Task<T>> body)
+        public override async Task<T> Invoke<T>(Func<Task<T>> body)
         {
             throw new OpenCircuitException();
         }
@@ -48,7 +48,7 @@ namespace Akka.Pattern
         /// <param name="body">N/A</param>
         /// <exception cref="OpenCircuitException">This exception is thrown automatically since the circuit is open.</exception>
         /// <returns>N/A</returns>
-        public override Task Invoke(Func<Task> body)
+        public override async Task Invoke(Func<Task> body)
         {
             throw new OpenCircuitException();
         }
@@ -56,17 +56,15 @@ namespace Akka.Pattern
         /// <summary>
         /// No-op for open, calls are never executed so cannot succeed or fail
         /// </summary>
-        protected override void CallFails()
+        protected internal override void CallFails()
         {
-            //throw new NotImplementedException();
         }
 
         /// <summary>
         /// No-op for open, calls are never executed so cannot succeed or fail
         /// </summary>
-        protected override void CallSucceeds()
+        protected internal override void CallSucceeds()
         {
-            //throw new NotImplementedException();
         }
 
         /// <summary>
@@ -77,6 +75,11 @@ namespace Akka.Pattern
         {
             Task.Delay(_breaker.ResetTimeout).ContinueWith(task => _breaker.AttemptReset());
         }
+
+        /// <summary>
+        /// Override for more descriptive toString
+        /// </summary>
+        public override string ToString() => "Open";
     }
 
     /// <summary>
@@ -106,13 +109,13 @@ namespace Akka.Pattern
         /// <param name="body">Implementation of the call that needs protected</param>
         /// <exception cref="OpenCircuitException">TBD</exception>
         /// <returns><see cref="Task"/> containing result of protected call</returns>
-        public override Task<T> Invoke<T>(Func<Task<T>> body)
+        public override async Task<T> Invoke<T>(Func<Task<T>> body)
         {
             if (!_lock.CompareAndSet(true, false))
             {
                 throw new OpenCircuitException();
             }
-            return CallThrough(body);
+            return await CallThrough(body);
         }
 
         /// <summary>
@@ -122,19 +125,19 @@ namespace Akka.Pattern
         /// <param name="body">Implementation of the call that needs protected</param>
         /// <exception cref="OpenCircuitException">TBD</exception>
         /// <returns><see cref="Task"/> containing result of protected call</returns>
-        public override Task Invoke(Func<Task> body)
+        public override async Task Invoke(Func<Task> body)
         {
             if (!_lock.CompareAndSet(true, false))
             {
                 throw new OpenCircuitException();
             }
-            return CallThrough(body);
+            await CallThrough(body);
         }
 
         /// <summary>
         /// Reopen breaker on failed call.
         /// </summary>
-        protected override void CallFails()
+        protected internal override void CallFails()
         {
             _breaker.TripBreaker(this);
         }
@@ -142,7 +145,7 @@ namespace Akka.Pattern
         /// <summary>
         /// Reset breaker on successful call.
         /// </summary>
-        protected override void CallSucceeds()
+        protected internal override void CallSucceeds()
         {
             _breaker.ResetBreaker();
         }
@@ -207,7 +210,7 @@ namespace Akka.Pattern
         /// On failed call, the failure count is incremented.  The count is checked against the configured maxFailures, and
         /// the breaker is tripped if we have reached maxFailures.
         /// </summary>
-        protected override void CallFails()
+        protected internal override void CallFails()
         {
             if (IncrementAndGet() == _breaker.MaxFailures)
             {
@@ -218,7 +221,7 @@ namespace Akka.Pattern
         /// <summary>
         /// On successful call, the failure count is reset to 0
         /// </summary>
-        protected override void CallSucceeds()
+        protected internal override void CallSucceeds()
         {
             Reset();
         }
